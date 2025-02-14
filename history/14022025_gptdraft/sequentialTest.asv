@@ -2,7 +2,7 @@ function [decisions, stageMetrics] = sequentialTest(MSCvalues, params)
 % sequentialTest applies the decision process using the accumulated MSC values.
     % decisions = zeros(1, K); 
     stageMetrics = cumsum(MSCvalues,2); 
-    decisions = zeros(size(stageMetrics));
+    decisions = nan(size(stageMetrics));
 
     % % Compute stopping decisions
     % for k = 1:params.K
@@ -14,7 +14,7 @@ function [decisions, stageMetrics] = sequentialTest(MSCvalues, params)
         for k = 1:params.K
             for freq = params.testFrequencies
 
-                if ~(k==1) && ~isnan(decisions(channel, k, freq))%(decisions(channel, k, freq))~=0
+                if ~(k==1) && ~isnan(decisions(channel, k, freq))
                     % Not first test and already decided, keep decision
                     decisions(channel, k, freq) = decisions(channel, k-1, freq);
 
@@ -29,10 +29,8 @@ function [decisions, stageMetrics] = sequentialTest(MSCvalues, params)
 
                     elseif k==params.K 
                         % Last trial, and not enough evidence found for
-                        % either detection criteria (ERROR!)
-                        % decisions(channel, :, freq) = NaN;
-                        error('Oops')
-                        
+                        % either
+
                     end
 
                 end

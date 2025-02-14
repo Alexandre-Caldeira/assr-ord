@@ -1,11 +1,11 @@
 function perf = performanceMetrics(decisions, params) 
-% performanceMetrics computes dummy performance metrics for the sequential test. 
+% performanceMetrics computes performance metrics for the sequential test. 
     
     nTestFreqs = numel(params.testFrequencies);
     flagNoise = params.flagNoise;
     NumTests = params.nChannels * nTestFreqs;
 
-    is_noise = params.testFrequencies >= flagNoise;
+    is_noise = 1:nTestFreqs > flagNoise;
     mask = zeros(params.nChannels,params.K,nTestFreqs, 'logical');
     for i = 1:params.nChannels
         for j = 1:params.K
@@ -23,20 +23,20 @@ function perf = performanceMetrics(decisions, params)
     mask_FP = is_noise & is_detection;
     mask_TN = is_noise & is_futility;
 
-    perf.TP = zeros(params.nChannels,params.K, numel(params.signalFrequencies));
-    perf.FN = zeros(params.nChannels,params.K, numel(params.signalFrequencies));
-    perf.FP = zeros(params.nChannels,params.K, numel(params.noiseFrequencies));
-    perf.TN = zeros(params.nChannels,params.K, numel(params.noiseFrequencies));
+    perf.TP = zeros(params.nChannels,params.K, nTestFreqs);
+    perf.FN = zeros(params.nChannels,params.K, nTestFreqs);
+    perf.FP = zeros(params.nChannels,params.K, nTestFreqs);
+    perf.TN = zeros(params.nChannels,params.K, nTestFreqs);
 
     perf.TP(mask_TP) = 1;
     perf.FN(mask_FN) = 1;
     perf.FP(mask_FP) = 1;
     perf.TN(mask_TN) = 1;
 
-    % perf.TPR = 100*sum_reduce(sum_reduce(perf.TP,3),1)/NumTests;
-    % perf.FNR = 100*sum_reduce(sum_reduce(perf.FN,3),1)/NumTests;
-    % perf.FPR = 100*sum_reduce(sum_reduce(perf.FP,3),1)/NumTests;
-    % perf.TNR = 100*sum_reduce(sum_reduce(perf.TN,3),1)/NumTests;
+    perf.TPRr = 100*sum_reduce(sum_reduce(perf.TP,3),1)/NumTests;
+    perf.FNRr = 100*sum_reduce(sum_reduce(perf.FN,3),1)/NumTests;
+    perf.FPRr = 100*sum_reduce(sum_reduce(perf.FP,3),1)/NumTests;
+    perf.TNRr = 100*sum_reduce(sum_reduce(perf.TN,3),1)/NumTests;
 
     perf.TPR = 100*sum_reduce(sum_reduce(sum_reduce(perf.TP,3),1),2)/(NumTests*params.K);
     perf.FNR = 100*sum_reduce(sum_reduce(sum_reduce(perf.FN,3),1),2)/(NumTests*params.K);

@@ -1,6 +1,9 @@
 function fftSignals = computeFFT(signals, params) 
 % computeFFT computes the FFT along each window (row-wise) and 
 % returns only the positive frequencies. 
-    fftSignals = fft(signals); 
-    fftSignals = fftSignals(:, 1:params.nBins,:); 
+    fftSignals = zeros(params.nChannels, params.nBins, params.duration );
+    for channel = 1:params.nChannels
+        temp = fft(squeeze(signals(channel,:,:)),params.nfft, 1); 
+        fftSignals(channel,:,:) = temp(1:params.nBins,:); 
+    end
 end

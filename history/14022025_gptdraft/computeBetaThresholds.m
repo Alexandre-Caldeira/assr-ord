@@ -1,4 +1,4 @@
-function [aThresholds, gThresholds] = computeBetaThresholds(K, M, alpha) 
+function [aThresholds, gThresholds] = computeBetaThresholds(K, M, params) 
 % computeBetaThresholds calculates sequential detection and futility thresholds. 
     % aThresholds = zeros(1, K); 
     % gThresholds = zeros(1, K);
@@ -35,12 +35,13 @@ function [aThresholds, gThresholds] = computeBetaThresholds(K, M, alpha)
     %     Null = Null2;
 
 
-TotalAlpha      = 0.05;                        
+
+TotalAlpha      = params.alpha;                        
 Alpha_k         = ones(1,K)*(TotalAlpha/K);     
 Gamma_k         = ((1-TotalAlpha)/K).*ones(1,K);
 
 Resolution      = (1/0.0001);                  
-Xvalues         = 0:1/Resolution:3;            
+Xvalues         = 0:1/Resolution:20;            
 Null         	= betapdf(Xvalues, 1, M-1); %normpdf(Xvalues,muk1,sigmak1);% normpdf(Xvalues,0,0.05); %normpdf(Xvalues,0.05,0.3); %betapdf(Xvalues, 1, M-1); 
 Null            = Null/sum(Null);             	
 Beta_Norm       = Null/sum(Null);             	

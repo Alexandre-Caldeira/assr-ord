@@ -31,7 +31,7 @@ params.filter.order   = 8;                   % Butterworth filter order
 
 % Simulation settings (used when mode=='simulation')
 % params.sim.NumTests    = 1e5;    % Number of Monte Carlo tests
-params.sim.signalSNR   = -5;     % Signal-to-noise ratio in dB
+params.sim.signalSNR   = 150;     % Signal-to-noise ratio in dB
 params.duration = 120; % seconds
 params.nChannels = 3;
 
@@ -85,8 +85,8 @@ params.gThresholds = gThresholds;
 perf = performanceMetrics(decisions, params);
 
 % 7. Plot the results
-% fignum=2;
-% plotResults(aThresholds, gThresholds, stageMetrics, perf, params,fignum);
+fignum=2;
+plotResults(aThresholds, gThresholds, stageMetrics, perf, params,fignum);
 
 % 8. Print summary metrics
 fprintf('(FPR,pct.): %.4f\n', perf.FPR);
@@ -94,9 +94,9 @@ fprintf('(TPR,pct.): %.4f\n', perf.TPR);
 fprintf('(TNR,pct.): %.4f\n', perf.TNR);
 fprintf('(FNR,pct.): %.4f\n', perf.FNR);
 
-fprintf('(No decision...,pct.): %.4f\n', sum(isnan(decisions),'all')/numel(decisions));
+fprintf('(No decision...,pct.): %.4f\n', sum(decisions==0,'all')/numel(decisions));
 fprintf('(Stop: detected.,pct.): %.4f\n', sum(decisions==1,'all')/numel(decisions));
-fprintf('(Stop: futile.,pct.): %.4f\n', sum(decisions==-1,'all')/numel(decisions));
+fprintf('(Stop: futile.,pct.): %.4f\n', sum(decisions==1,'all')/numel(decisions));
 
 % end
 
