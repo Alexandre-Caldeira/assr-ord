@@ -1,0 +1,3309 @@
+
+=== Begin CGST_MSC_MCsim.m ===
+
+% OBJ: Gerar thresholds CGST-Beta e aplicar em MSC MC de sinal puro e ruido
+
+
+%% Setup
+clearvars; close all; clc
+
+%% Parametros
+K = 5;           % numero total de testes a aplicar sequencialmente
+FPd = 0.01;      % taxa de falso positivo desejado para o exame
+Mmax_exame = 90; % tempo total de exame em segundos
+M = 90/K;        % numero janelas de 1s usadas para cada teste
+
+[aThresholds,gThresholds] = get_beta_CGST_thresholds(K, M, FPd);
+
+%% Teste com distribuição teórica
+
+disp('-------------------------------------------------------------------')
+disp('MC amostrando Beta')
+FP      = zeros(1, K);      % number of false-positives
+TN      = zeros(1, K);      % number of true-negatives
+NumT    = 1*1e6;          % number of tests to carry out
+
+for ti=1:NumT
+    Ps          = betarnd(1,M-1,1,K);            % random p values: all assumptions are met, so the FPR should be exact. 
+    Plog        = Ps;           % fisher transform
+    Detected    = false;                % 
+    
+    % check for rejections
+    for k=1:K
+        if sum(Plog(1:k)) >= aThresholds(k)
+            FP(k) = FP(k)+1;
+            break
+        elseif sum(Plog(1:k)) <= gThresholds(k)
+            TN(k) = TN(k)+1;
+            break
+        end
+    end
+end
+
+Stage_FPRs  = FP/NumT               % stage-wise FPRs
+Stage_TNRs  = TN/NumT               % stage-wise FPRs
+FPR         = sum(FP) / NumT        % total FPR
+TNR         = sum(TN) / NumT        % total FPR
+
+%% Teste com MSC de ruido
+% 
+% disp('MC amostrando FFT(rndn)')
+% FS = 1000; 
+% NumT = 5e3;
+% 
+% % For each test from 1 to NumT
+% % MSC = nan(NumT,FS/2+1);
+% % Generate Noise with M windows
+% NFFT = FS;                         % rever isso aqui ! motivo/causas/impactos comp. 
+% Njanelas = M;
+% NpontosTotal = NFFT*Njanelas;      % Numero total de pontos de cada sinal
+% ruido = randn(NumT,NpontosTotal);  % Gera um ruido gaussiano, teoricamente de variancia unitaria e media nula
+% ruido = ruido-mean(ruido);         % Força a media nula
+% signals = ruido./std(ruido);       % Força a variancia desejada para o sinal
+% signals = reshape(signals,NumT*NFFT, Njanelas);
+% 
+% % Compute FFT of all M windows
+% SIGNALS = fft(signals);
+% SIGNALS = SIGNALS(1:floor(end/2)+1,:); % only half the FFT spectrum is valid
+% f = FS/2*linspace(0,1,NFFT/2+1)'; % only half the FFT spectrum is valid
+% 
+% % Compute MSC in any freq for the M-th window
+% MSC = msc_fft(SIGNALS,M);
+% MSC = reshape(MSC,[],1);
+% 
+% % histogram(MSC) % see simulated H0 PDF
+% count = 0;
+% FP      = zeros(1, K);      % number of false-positives
+% TN      = zeros(1, K);      % number of true-negatives
+% 
+% for ti=1:5:NumT
+%     Ps          = MSC(ti:ti+4); 
+%     Plog        = Ps;           
+%     count = count+1;
+%     % check for rejections
+%     for k=1:K        
+%         if sum(Plog(1:k)) >= aThresholds(k)
+%             FP(k) = FP(k)+1;
+%             break
+%         elseif sum(Plog(1:k)) <= gThresholds(k)
+%             TN(k) = TN(k)+1;
+%             break
+%         end
+% 
+%     end
+% end
+% 
+% % Stage_FPRs  = FP/count               % stage-wise FPRs
+% % Stage_TNRs  = TN/count               % stage-wise FPRs
+% FPR         = sum(FP) / count        % total FPR
+% TNR         = sum(TN) / count        % total FPR
+
+
+disp('-------------------------------------------------------------------')
+disp('MC amostrando FFT(rndn) SNR = -100 dB')
+
+NumT = 5e3;
+FS = 1000;  % frequencia de amostragem 
+SFREQ = 80; % frequencia de estimulacao 
+NFFT = FS;                         % rever isso aqui ! motivo/causas/impactos comp. 
+Nsinais = NumT;
+Njanelas = Mmax_exame;
+
+SNRfun = @() -100;
+[S5] = gen_signals(SNRfun, FS, SFREQ, NFFT, Nsinais, Njanelas);
+
+% histogram(MSC) % see simulated H0 PDF
+count = 0;
+FP      = zeros(1, K);      % number of false-positives
+TN      = zeros(1, K);      % number of true-negatives
+
+for ti=1:NumT
+    % Ps          = msc_fft(S5(:,:,ti),M);
+    % Plog        = Ps;           
+    count = count+1;
+    % check for rejections
+    Plog = zeros(1,K);
+
+    for k=1:K        
+
+        ind_inicial = M*(k-1)+1;
+        ind_final = ind_inicial+M-1;
+        Ps = msc_fft(S5(:,ind_inicial:ind_final,ti),M);
+
+        Plog(k) = Ps(140);
+
+        if sum(Plog(1:k)) >= aThresholds(k)
+            FP(k) = FP(k)+1;
+            break
+
+        elseif sum(Plog(1:k)) <= gThresholds(k)
+            TN(k) = TN(k)+1;
+            break
+
+        end
+
+    end
+end
+
+Stage_FPRs  = FP/count               % stage-wise TPRs
+Stage_TNRs  = TN/count               % stage-wise FNRs
+FPR         = sum(FP) / count        % total TPR
+TNR         = sum(TN) / count        % total FNR
+count
+
+%% Teste com MSC de sinal ruidoso (SNR = 15 dB)
+
+disp('-------------------------------------------------------------------')
+disp('MC amostrando FFT(sinal+rndn) SNR = 15 dB')
+FS = 1000;  % frequencia de amostragem 
+SFREQ = 80; % frequencia de estimulacao 
+NFFT = FS;                         % rever isso aqui ! motivo/causas/impactos comp. 
+Nsinais = NumT;
+Njanelas = Mmax_exame;
+
+SNRfun = @() 15;
+[S5] = gen_signals(SNRfun, FS, SFREQ, NFFT, Nsinais, Njanelas);
+
+% histogram(MSC) % see simulated H0 PDF
+count = 0;
+TP      = zeros(1, K);      % number of false-positives
+FN      = zeros(1, K);      % number of true-negatives
+
+for ti=1:NumT
+    % Ps          = msc_fft(S5(:,:,ti),M);
+    % Plog        = Ps;           
+    count = count+1;
+    % check for rejections
+    Plog = zeros(1,K);
+
+    for k=1:K        
+
+        ind_inicial = M*(k-1)+1;
+        ind_final = ind_inicial+M-1;
+        Ps = msc_fft(S5(:,ind_inicial:ind_final,ti),M);
+
+        Plog(k) = Ps(SFREQ);
+
+        if sum(Plog(1:k)) >= aThresholds(k)
+            TP(k) = TP(k)+1;
+            break
+        elseif sum(Plog(1:k)) <= gThresholds(k)
+            FN(k) = FN(k)+1;
+            break
+        end
+
+    end
+end
+
+Stage_TPRs  = TP/count               % stage-wise TPRs
+Stage_FNRs  = FN/count               % stage-wise FNRs
+TPR         = sum(TP) / count        % total TPR
+FNR         = sum(FN) / count        % total FNR
+
+%% Teste com MSC de sinal ruidoso (SNR = -5 dB)
+
+disp('-------------------------------------------------------------------')
+disp('MC amostrando FFT(sinal+rndn) SNR = -5 dB')
+FS = 1000;  % frequencia de amostragem 
+SFREQ = 80; % frequencia de estimulacao 
+NFFT = FS;                         % rever isso aqui ! motivo/causas/impactos comp. 
+Nsinais = NumT;
+Njanelas = Mmax_exame;
+
+SNRfun = @() -5;
+[S5] = gen_signals(SNRfun, FS, SFREQ, NFFT, Nsinais, Njanelas);
+
+% histogram(MSC) % see simulated H0 PDF
+count = 0;
+TP      = zeros(1, K);      % number of false-positives
+FN      = zeros(1, K);      % number of true-negatives
+
+for ti=1:NumT
+    % Ps          = msc_fft(S5(:,:,ti),M);
+    % Plog        = Ps;           
+    count = count+1;
+    % check for rejections
+    Plog = zeros(1,K);
+
+    for k=1:K        
+
+        ind_inicial = M*(k-1)+1;
+        ind_final = ind_inicial+M-1;
+        Ps = msc_fft(S5(:,ind_inicial:ind_final,ti),M);
+
+        Plog(k) = Ps(SFREQ);
+
+        if sum(Plog(1:k)) >= aThresholds(k)
+            TP(k) = TP(k)+1;
+            break
+        elseif sum(Plog(1:k)) <= gThresholds(k)
+            FN(k) = FN(k)+1;
+            break
+        end
+
+    end
+end
+
+Stage_TPRs  = TP/count               % stage-wise TPRs
+Stage_FNRs  = FN/count               % stage-wise FNRs
+TPR         = sum(TP) / count        % total TPR
+FNR         = sum(FN) / count        % total FNR
+
+%% Teste com MSC de sinal ruidoso (SNR = -10 dB)
+
+disp('-------------------------------------------------------------------')
+disp('MC amostrando FFT(sinal+rndn) SNR = -10 dB')
+FS = 1000;  % frequencia de amostragem 
+SFREQ = 80; % frequencia de estimulacao 
+NFFT = FS;                         % rever isso aqui ! motivo/causas/impactos comp. 
+Nsinais = NumT;
+Njanelas = Mmax_exame;
+
+SNRfun = @() -10;
+[S5] = gen_signals(SNRfun, FS, SFREQ, NFFT, Nsinais, Njanelas);
+
+% histogram(MSC) % see simulated H0 PDF
+count = 0;
+TP      = zeros(1, K);      % number of false-positives
+FN      = zeros(1, K);      % number of true-negatives
+
+for ti=1:NumT
+    % Ps          = msc_fft(S5(:,:,ti),M);
+    % Plog        = Ps;           
+    count = count+1;
+    % check for rejections
+    Plog = zeros(1,K);
+
+    for k=1:K        
+
+        ind_inicial = M*(k-1)+1;
+        ind_final = ind_inicial+M-1;
+        Ps = msc_fft(S5(:,ind_inicial:ind_final,ti),M);
+
+        Plog(k) = Ps(80);
+
+        if sum(Plog(1:k)) >= aThresholds(k)
+            TP(k) = TP(k)+1;
+            break
+        elseif sum(Plog(1:k)) <= gThresholds(k)
+            FN(k) = FN(k)+1;
+            break
+        end
+
+    end
+end
+
+% Stage_TPRs  = TP/count               % stage-wise TPRs
+% Stage_FNRs  = FN/count               % stage-wise FNRs
+TPR         = sum(TP) / count        % total TPR
+FNR         = sum(FN) / count        % total FNR
+
+%% Teste com MSC de sinal ruidoso (SNR = -15 dB)
+
+disp('-------------------------------------------------------------------')
+disp('MC amostrando FFT(sinal+rndn) SNR = -15 dB')
+FS = 1000;  % frequencia de amostragem 
+SFREQ = 80; % frequencia de estimulacao 
+NFFT = FS;                         % rever isso aqui ! motivo/causas/impactos comp. 
+Nsinais = NumT;
+Njanelas = Mmax_exame;
+
+SNRfun = @() -15;
+[S5] = gen_signals(SNRfun, FS, SFREQ, NFFT, Nsinais, Njanelas);
+
+% histogram(MSC) % see simulated H0 PDF
+count = 0;
+TP      = zeros(1, K);      % number of false-positives
+FN      = zeros(1, K);      % number of true-negatives
+
+for ti=1:NumT
+    % Ps          = msc_fft(S5(:,:,ti),M);
+    % Plog        = Ps;           
+    count = count+1;
+    % check for rejections
+    Plog = zeros(1,K);
+
+    for k=1:K        
+
+        ind_inicial = M*(k-1)+1;
+        ind_final = ind_inicial+M-1;
+        Ps = msc_fft(S5(:,ind_inicial:ind_final,ti),M);
+
+        Plog(k) = Ps(80);
+
+        if sum(Plog(1:k)) >= aThresholds(k)
+            TP(k) = TP(k)+1;
+            break
+        elseif sum(Plog(1:k)) <= gThresholds(k)
+            FN(k) = FN(k)+1;
+            break
+        end
+
+    end
+end
+
+% Stage_TPRs  = TP/count               % stage-wise TPRs
+% Stage_FNRs  = FN/count               % stage-wise FNRs
+TPR         = sum(TP) / count        % total TPR
+FNR         = sum(FN) / count        % total FNR
+
+%% Teste com MSC de sinal ruidoso (SNR = -25 dB)
+
+disp('-------------------------------------------------------------------')
+disp('MC amostrando FFT(sinal+rndn) SNR = -25 dB')
+FS = 1000;  % frequencia de amostragem 
+SFREQ = 80; % frequencia de estimulacao 
+NFFT = FS;                         % rever isso aqui ! motivo/causas/impactos comp. 
+Nsinais = NumT;
+Njanelas = Mmax_exame;
+
+SNRfun = @() -25;
+[S5] = gen_signals(SNRfun, FS, SFREQ, NFFT, Nsinais, Njanelas);
+
+% histogram(MSC) % see simulated H0 PDF
+count = 0;
+TP      = zeros(1, K);      % number of false-positives
+FN      = zeros(1, K);      % number of true-negatives
+
+for ti=1:NumT
+    % Ps          = msc_fft(S5(:,:,ti),M);
+    % Plog        = Ps;           
+    count = count+1;
+    % check for rejections
+    Plog = zeros(1,K);
+
+    for k=1:K        
+
+        ind_inicial = M*(k-1)+1;
+        ind_final = ind_inicial+M-1;
+        Ps = msc_fft(S5(:,ind_inicial:ind_final,ti),M);
+
+        Plog(k) = Ps(80);
+
+        if sum(Plog(1:k)) >= aThresholds(k)
+            TP(k) = TP(k)+1;
+            break
+        elseif sum(Plog(1:k)) <= gThresholds(k)
+            FN(k) = FN(k)+1;
+            break
+        end
+
+    end
+end
+
+% Stage_TPRs  = TP/count               % stage-wise TPRs
+% Stage_FNRs  = FN/count               % stage-wise FNRs
+TPR         = sum(TP) / count        % total TPR
+FNR         = sum(FN) / count        % total FNR
+
+
+
+
+
+
+
+=== End CGST_MSC_MCsim.m ===
+
+
+=== Begin SACRED_FUNCTIONAL_5STAGE_CGST.m ===
+
+%% 
+clear all
+close all
+clc
+
+% parameters
+K               = 5;                            % analyse data 3 times
+TotalAlpha      = 0.01;                         % pre-specified alpha-level for the full sequential test
+Alpha_k         = ones(1,K)*(TotalAlpha/K);     % alpha to spend at each stage
+Gamma_k         = [0.1, 0.15, 0.2, 0.25, 0.29]; % ...!
+Resolution      = (1/0.0001);                   % the resolution of the approximated distribution of the test statistic
+Xvalues         = 0:1/Resolution:35;            % the x-axis along which the distribution of the test statistic will be defined
+Null         	= chi2pdf(Xvalues,2);           % null distribution for test statistic at stage k
+Null            = Null/sum(Null);             	% normalise 
+Chi2_Norm       = Null/sum(Null);             	% normalise 
+
+% stage 1 threshold
+k               = 1;                                % stage 1
+aThresholds(k)	= -2*log( Alpha_k(k) );                                                 % for the first stage, we don't need to do any convolutions
+gThresholds(k)	= -2*log(1- Gamma_k(k) );
+TruncInd_Ra      = round(aThresholds(k)*Resolution);                                          % The location where the stage 1 distribution will be truncated (later at stage two)
+TruncInd_Rg      = round(gThresholds(k)*Resolution);           
+
+for k = 2:K
+    disp(k)
+    NullTrunc                   = Null;                                                     % reset null hip.
+    NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));              % truncate distribution: this is the stage k-1 distribution upon entering stage k
+    NullTrunc(1:TruncInd_Rg)    = zeros(1, length(NullTrunc(1:TruncInd_Rg)));
+    
+    plot(NullTrunc)
+    % drawnow
+    
+    Null2                       = conv(Chi2_Norm, NullTrunc);                               % convolve the truncated distribution with the stage two distribution (given by Chi2_Norm) to give the distibution of the summary statistic for stage k
+    Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
+    % Null2                       = Null2 / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1))));   % normalise. Note: area is reduced due to the truncation
+    
+    TruncInd_Ra                  = findIndex(Null2, sum(Null2) - Alpha_k(k));            % find the critical threshold. Function "findIndex" is a search function (probably not the most efficient, but it works)
+    aThresholds(k)              = TruncInd_Ra/Resolution;                                    % translate the index to a threshold
+    TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
+    gThresholds(k)              = TruncInd_Rg/Resolution;
+    Null                        = Null2; 
+    % disp(aThresholds)
+    % disp(gThresholds)
+end
+disp('')
+disp('--------------------------------')
+% disp(aThresholds)
+% disp(gThresholds)
+% Thresholds =[aThresholds;gThresholds]
+Thresholds = aThresholds;
+%%
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+% % % % % % % % % % % verify FPR  % % % % % % % % % % % % % % % % % % % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+K       = 5;                % test the 5-staged design
+FP      = zeros(1, K);      % number of false-positives
+NumT    = 1000000;          % number of tests to carry out
+
+for ti=1:NumT
+    Ps          = rand(1,K);            % random p values: all assumptions are met, so the FPR should be exact. 
+    Plog        = -2*log(Ps);           % fisher transform
+    Detected    = false;                % 
+    
+    % check for rejections
+    k = 1;
+    if sum(Plog(1:k)) > Thresholds(k)       % H0 rejected at stage 1 --> stop
+        FP(k) = FP(k) + 1;
+    else
+        k = 2;
+        if sum(Plog(1:k)) > Thresholds(k)       % H0 rejected at stage 2 --> stop
+            FP(k) = FP(k) + 1;
+        else
+            k = 3;
+            if sum(Plog(1:k)) > Thresholds(k)   % H0 rejected at stage 3 --> stop
+                FP(k) = FP(k) + 1;
+            else
+                k = 4;
+                if sum(Plog(1:k)) > Thresholds(k)   % H0 rejected at stage 3 --> stop
+                    FP(k) = FP(k) + 1;
+                else
+                    k = 5;
+                    if sum(Plog(1:k)) > Thresholds(k)   % H0 rejected at stage 3 --> stop
+                        FP(k) = FP(k) + 1;
+                    end
+                end
+            end
+        end
+    end
+end
+
+Stage_FPRs  = FP/NumT               % stage-wise FPRs
+FPR         = sum(FP) / NumT        % total FPR
+=== End SACRED_FUNCTIONAL_5STAGE_CGST.m ===
+
+
+=== Begin de_20_08_edit_25_11.m ===
+
+% OBJ: gerar curva eficiencia de pareto para CGST MSC
+% https://pt.wikipedia.org/wiki/Efici%C3%AAncia_de_Pareto
+
+%useful viz plot:
+% figure; stem(all_freqs,-2*log(Ps(all_freqs)))
+%% Setup
+clearvars; 
+% close all;
+clc
+
+%% Parametros
+Kd = 8;           % numero total de testes a aplicar sequencialmente
+FPd = 0.05;      % taxa de falso positivo desejado para o exame
+Mmin = 32;
+
+NumT = 5e3; 
+Nsinais = NumT;
+
+for cont_vol=1:11
+    
+    max_int = 5;
+    int_inic = 3;
+    
+    for cont_int = int_inic:max_int
+        
+        % REAL: s frequências das portadoras para ambas os ouvidos foram as mesmas: 
+        % 500, 1000, 2000,4000 Hz, modulados, respectivamente, nas frequências 
+        % 81, 85, 89 e 93 Hz, para o ouvido direito, e 83, 87, 91 e 95 Hz, 
+        % para o ouvido esquerdo . - pg 52 tese colatina
+        
+        signal_freq_bins =  [82 84 86 88 90 92 94 96];
+        noise_freq_bins = 351:1:451;
+
+        %%%%%%%%%%%%
+        %% Carrega dados
+        
+        % Set path to data:
+        path = 'C:\PPGEE\SBEB_CBA_24\ASSR - Coleta OFFLINE';
+        addpath(path)
+
+        %vetor dos voluntários 
+        Vvoluntario = {'Abdon';'Ana';'BBB';'Colatina';'Erick';'Luciana';...
+            'Sombra';'Quenaz';'Vinicius';'Sacola';'Wreikson'}; 
+        
+        %vetor da intensidade 
+        Vintensidade = {'70';'60';'50';'40';'30'}; 
+        load('eletrodos.mat')
+        ganho  = 200;
+        remoc = 0.1/ganho; 
+        
+        voluntario = cell2mat(Vvoluntario(cont_vol,:));
+        
+        if cont_int<0
+             load([voluntario 'ESP'], 'x','Fs','binsM','freqEstim') 
+        else
+            intensidade = cell2mat(Vintensidade(cont_int,:));
+            load([voluntario '_'  intensidade 'dB'], 'x','Fs','binsM','freqEstim') 
+        end
+        
+        nfft = Fs; %1segundo de sinal 
+         
+        %retirar componente DC por janela (fiz isso pq no processamento em
+        %tempo real é por janela)
+        x = x - repmat(mean(x),nfft,1); %tirar a média de cada de cada trecho - devido a remoção
+        
+
+        % Em seguida, os sinais foram filtrados digitalmente por um filtro
+        % Butterworth passa-banda de oitava ordem com frequência de corte de 1 Hz 
+        % acima e abaixo da frequência de modulação (Antunese Felix, 2019).
+        % - pg 53, tese colatina
+        fcInferior = min(signal_freq_bins)-1;
+        fcSuperior = max(signal_freq_bins)+1;
+
+        [b,a] = butter(8,[fcInferior/(Fs/2), fcSuperior/(Fs/2)]);
+        x = filter(b,a,x); 
+        % excluir os dois primeiros segundos do inicio da coleta 
+        x(:,1:2,:) =[]; 
+        
+        % Encontrar o valor máximo por canal 
+        Vmax = squeeze(max(max(abs(x)),[],3));
+      
+        pos_eletrodo    = 1;
+        xmedia = x(:,~ind,pos_eletrodo);
+        
+        SIGNALS = fft(xmedia,Fs); %*2/nfft*1e9;
+        FS = Fs;
+        NFFT = Fs;
+        SIGNALS = SIGNALS(1:floor(end/2)+1,:); % only half the FFT spectrum is valid
+        
+        all_freqs = [signal_freq_bins noise_freq_bins];
+
+        SIGNALS = normalize(SIGNALS);      
+        
+        %% Calc thresholds
+                             
+        M = floor(size(SIGNALS,2)/Kd);
+        if M<Mmin
+            if floor(size(SIGNALS,2)/Mmin)<=1
+                % exame_tem_apenasfloor(size(SIGNALS,2)/Kd))
+                
+                % error
+                disp(['Exame curto demais para teste sequencial com MSC! ', ...
+                   num2str(size(SIGNALS,2)),' janelas totais.' ])
+                break
+            end  
+        
+            K = floor(size(SIGNALS,2)/Mmin)
+            M=Mmin
+        else
+            K = Kd
+            M
+        end
+        
+        
+        TotalAlpha      = FPd;                        
+        Alpha_k         = ones(1,K)*(TotalAlpha/K);     
+        Gamma_k         = ((1-TotalAlpha)/K).*ones(1,K);
+        
+        aThresholds  = zeros(1,K);
+        gThresholds  = zeros(1,K);
+        
+        Resolution      = (1/0.0001);                  
+        Xvalues         = 0:1/Resolution:1;            
+        Null         	= betapdf(Xvalues, 1, M-1); 
+        Null            = Null/sum(Null);             	
+        Chi2_Norm       = Null/sum(Null);             	
+        k               = 1;                            
+        aThresholds(k)	= 1 - Alpha_k(k).^(1./(M-1));  
+        gThresholds(k)	= 1-(1- Gamma_k(k)).^(1./(M-1));
+        TruncInd_Ra      = round(aThresholds(k)*Resolution);                                         
+        TruncInd_Rg      = round(gThresholds(k)*Resolution);           
+        
+        for k = 2:K
+            NullTrunc                   = Null;                                                     
+            NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));              
+            NullTrunc(1:TruncInd_Rg)    = zeros(1, length(NullTrunc(1:TruncInd_Rg)));
+            Null2                       = conv(Chi2_Norm, NullTrunc);                              
+            Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
+            TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k));            
+            aThresholds(k)              = TruncInd_Ra/Resolution;                                    
+            TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
+            gThresholds(k)              = TruncInd_Rg/Resolution;
+            Null                        = Null2;
+        end
+        
+        
+        %% Plot thresholds
+        disp('')
+        disp('--------------------------------')
+        should_plot = 1;
+        
+        if should_plot
+            figure(1)
+            
+            cv_max = max([aThresholds, gThresholds]);
+            area([0,M],[1.2*cv_max,1.2*cv_max], 'FaceColor',[0.8500 0.3250 0.0980], 'FaceAlpha',0.1)
+            hold on
+            grid on
+            area([M,K*M],[1.2*cv_max,1.2*cv_max], 'FaceColor',[0 0.4470 0.7410], 'FaceAlpha',0.1)            
+            
+            dim = [0.14 0.75 0.1 0.1];
+            str = {'Data collection', ['[M_{min}= ',num2str(M),']']};
+            ta = annotation('textbox',dim,'String',str, ...
+                'FitBoxToText','on', 'FontSize',12);
+            ta.FaceAlpha = 0.2;
+            ta.EdgeColor = [0.8500 0.3250 0.0980];  
+            ta.BackgroundColor = [0.8500 0.3250 0.0980];  
+            ta.Color = [.2 .2 .2]; 
+            
+            dim = [0.225 0.75 0.1 0.1];
+            str = {'Test region'};
+            tb = annotation('textbox',dim,'String',str, ...
+                'FitBoxToText','on', 'FontSize',12);
+            tb.FaceAlpha = 0.2;  
+            tb.EdgeColor = [0 0.4470 0.7410]; 
+            tb.BackgroundColor = [0 0.4470 0.7410]; 
+            tb.Color = [.2 .2 .2]; 
+        end
+        
+        %signal freqs
+        random_exam = zeros(numel(signal_freq_bins),K);
+        hit = zeros(1,K);
+        miss= zeros(1,K);
+        
+        c = 0.9*gray(numel(signal_freq_bins));
+        
+        for idx_freq = 1:numel(signal_freq_bins)
+            
+            flag = 1;
+            for k=1:K
+                ind_inicial = M*(k-1)+1;
+                ind_final = ind_inicial+M-1;
+                Ps = msc_fft(SIGNALS(:,ind_inicial:ind_final),M);
+                random_exam(idx_freq,k) = Ps(signal_freq_bins(idx_freq));
+        
+                if sum(random_exam(idx_freq,1:k)) >= aThresholds(k) && flag
+                    hit(k) = hit(k)+1;
+                    last_k = k;
+                    final_v = sum(random_exam(idx_freq,1:k));
+                    flag = 0;
+                    
+                    % continue
+                elseif sum(random_exam(idx_freq,1:k)) <= gThresholds(k) && flag
+                    miss(k) = miss(k)+1;
+                    last_k = k;
+                    final_v = sum(random_exam(idx_freq,1:k));
+                    flag = 0;
+                    
+                    % continue
+                end
+            end
+        
+            if should_plot
+                plot(M:M:M*K, cumsum(random_exam(idx_freq,:)),'--', ...
+                    'LineWidth',1.5, 'Color', c(idx_freq,:))
+                plot(M:M:M*K, cumsum(random_exam(idx_freq,:)),'.', ...
+                    'MarkerSize',12, 'Color', c(idx_freq,:))
+            end
+        end
+        
+        if should_plot
+            colormap(c)
+            cb = colorbar;
+            cb.TickLabels = signal_freq_bins(round(linspace(1,numel(signal_freq_bins),11)));
+
+            p1 = plot(M:M:M*K, aThresholds, 'LineWidth',1.8, 'Color',"#77AC30"); %[0 0.4470 0.7410]);
+            p2 = plot(M:M:M*K, gThresholds,'LineWidth',1.8, 'Color',"#A2142F");%[0.8500 0.3250 0.0980]);
+            
+            title(['Critical values for coherence-based early stopping exam with ',...
+                num2str(round(100*FPd)),'% significance'], 'FontSize', 18)
+            legend([p1,p2],'Detection [ \alpha_k ]', 'Futility [ \gamma_k ]', ...
+                'Fontsize', 15, 'Location', 'SouthEast', 'AutoUpdate', 'off')
+            ylabel('\Sigma_1^k MSC  [summary statistic]', 'Fontsize', 20)
+            xlabel('Exam k-th epoch [seconds]', 'Fontsize', 20)
+
+            xlim([0,K*M])
+            ylim([0,1.05*cv_max])
+            hold off
+        end
+
+        
+        FNRs = miss/numel(signal_freq_bins);
+        TPRs = hit/numel(signal_freq_bins);
+        FNRt(cont_vol,cont_int-int_inic+1,:) = FNRs;
+        TPRt(cont_vol,cont_int-int_inic+1,:) = TPRs;
+            
+        %noise freqs
+        random_exam = zeros(numel(signal_freq_bins),K);
+        hit = zeros(1,K);
+        miss= zeros(1,K);
+        
+        for idx_freq = 1:numel(noise_freq_bins)
+            
+            flag = 1;
+            for k=1:K
+                ind_inicial = M*(k-1)+1;
+                ind_final = ind_inicial+M-1;
+                Ps = msc_fft(SIGNALS(:,ind_inicial:ind_final),M);
+                random_exam(idx_freq,k) = Ps(noise_freq_bins(idx_freq));
+        
+                if sum(random_exam(idx_freq,1:k)) >= aThresholds(k) && flag
+                    hit(k) = hit(k)+1;
+                    last_k = k;
+                    final_v = sum(random_exam(idx_freq,1:k));
+                    flag = 0;
+                    
+                    % break
+                elseif sum(random_exam(idx_freq,1:k)) <= gThresholds(k) && flag
+                    miss(k) = miss(k)+1;
+                    last_k = k;
+                    final_v = sum(random_exam(idx_freq,1:k));
+                    flag = 0;
+                    
+                    % break
+                end
+            end
+        end
+        
+        TNRs = miss/numel(noise_freq_bins);
+        FPRs = hit/numel(noise_freq_bins);
+        TNRt(cont_vol,cont_int-int_inic+1,:) = TNRs;
+        FPRt(cont_vol,cont_int-int_inic+1,:) = FPRs;
+        
+    end
+    
+    % mTP = mean(TPRt)
+    % mFP = mean(FPRt)
+    % mFN = mean(FNRt)
+    % mTN = mean(TNRt)
+
+
+end
+%%
+% Taxa de deteccao media por estágio para cada intensidade:
+pd_k =  squeeze(mean(TPRt,1)); % intensidade = linhas, estagio = colunas
+
+% Taxa de deteccao total por intensidade:
+PD = round(100*sum(pd_k,2),2);
+
+% similarmente para outros:
+fp_k = squeeze(mean(FPRt,1));
+tn_k = squeeze(mean(TNRt,1));
+fn_k = squeeze(mean(FNRt,1));
+
+FP = round(100*sum(fp_k,2),2);
+TN = round(100*sum(tn_k,2),2);
+FN = round(100*sum(fn_k,2),2);
+
+% mostrar resultados:
+Resultados = table(cell2mat(Vintensidade(int_inic:max_int)), PD,FP, TN, FN, ...
+    'VariableNames',{'Intensidade [dB]', ...
+    'PD [%]', 'FP \alpha [%]', ...
+    'TN [%]', 'FN [%] \beta'});
+fprintf('\n\n\n')
+disp(Resultados)
+
+
+% fp_final = mean(FPRt,'all')
+% pd_final = mean(TPRt,'all')
+% mean(FNRt,'all')
+% mean(TNRt,'all')
+
+=== End de_20_08_edit_25_11.m ===
+
+
+=== Begin eeg_is_normal_LIMPO_25_11.m ===
+
+%% Setup
+clearvars; 
+close all
+clc
+
+should_plot = 1;
+
+%% Parametros
+Kd = 999;        % numero total de testes a aplicar sequencialmente 
+                % (dos ultimos Mmin segundos apos passar Msample segundos)
+FPd = 0.05;     % taxa de falso positivo desejado para o exame
+
+% Msample = 32; % best = 32 / 20 a 24
+Mmin = 2; %floor(Msample*0.6);
+sum_step = 1;
+
+NumT = 5e3;
+Nsinais = NumT;
+
+int_inic = 3;
+max_int = 3;
+
+FNRt = nan(11,max_int-int_inic+1, Kd);
+TPRt = nan(11,max_int-int_inic+1, Kd);
+TNRt = nan(11,max_int-int_inic+1, Kd);
+FPRt = nan(11,max_int-int_inic+1, Kd);
+
+for cont_int = int_inic:max_int
+for cont_vol=3:3
+
+% always plot last run
+if cont_int ==max_int
+    if cont_vol==11
+        should_plot = 1;
+    end
+end
+
+
+
+    cont_vol
+
+% REAL: s frequências das portadoras para ambas os ouvidos foram as mesmas: 
+% 500, 1000, 2000,4000 Hz, modulados, respectivamente, nas frequências a
+% 81, 85, 89 e 93 Hz, para o ouvido direito, e 83, 87, 91 e 95 Hz, 
+% para o ouvido esquerdo . - pg 52 tese colatina
+
+signal_freq_bins =  [82  84  86  88    90    92    94    96];
+% noise_freq_bins = 300:1:300+Msample;%440:1:451;
+
+% noise_freq_bins  =  [82  84  86  88    90    92    94    96];
+% signal_freq_bins = 351:1:451;
+
+% 443:1:451;
+noise_freq_bins = 300+round(signal_freq_bins.*exp(1)/2)+5; %[300 400 500]; %
+%%%%%%%%%%%%
+%% Carrega dados
+
+% SET THIS PATH:
+path = 'C:\PPGEE\SBEB_CBA_24\ASSR - Coleta OFFLINE';
+addpath(path)
+%vetor dos voluntários 
+Vvoluntario = {'Abdon';'Ana';'BBB';'Colatina';'Erick';'Luciana';...
+    'Sombra';'Quenaz';'Vinicius';'Sacola';'Wreikson'}; 
+
+%vetor da intensidade 
+Vintensidade = {'70';'60';'50';'40';'30'}; 
+load('eletrodos.mat')
+ganho  = 200;
+remoc = 0.1/ganho; 
+
+voluntario = cell2mat(Vvoluntario(cont_vol,:));
+
+if cont_int<0
+     load([voluntario 'ESP'], 'x','Fs','binsM','freqEstim') 
+else
+    intensidade = cell2mat(Vintensidade(cont_int,:));
+    load([voluntario '_'  intensidade 'dB'], 'x','Fs','binsM','freqEstim') 
+end
+
+nfft = Fs;%1segundo de sinal 
+ 
+%retirar componente DC por janela (fiz isso pq no processamento em
+%tempo real é por janela)
+x = x - repmat(mean(x),nfft,1); %tirar a média de cada de cada trecho - devido a remoção
+
+% meu
+% fcInferior = 70;
+% fcSuperior = 100;
+
+
+% d1 = designfilt('bandstopiir','FilterOrder',4, ...
+%                'HalfPowerFrequency1',59,'HalfPowerFrequency2',61, ...
+%                'DesignMethod','butter','SampleRate',Fs);
+
+
+% Em seguida, os sinais foram filtrados digitalmente por um filtro
+% Butterworth passa-banda de oitava ordem com frequência de corte de 1 Hz 
+% acima e abaixo da frequência de modulação (Antunese Felix, 2019).
+% - pg 53, tese colatina
+% fcInferior = min(signal_freq_bins)-1;
+% fcSuperior = max(signal_freq_bins)+1;
+% d2 = designfilt('bandpassiir','FilterOrder',8, ...
+%     'HalfPowerFrequency1',fcInferior,'HalfPowerFrequency2',fcSuperior, ...
+%     'DesignMethod','butter','SampleRate',Fs);
+
+% x = filtfilt(d1,x);
+% x = filtfilt(d2,x);
+
+%colatina
+% fcInferior = 70; % 70
+% fcSuperior = Fs/2 -1; % 100
+% [b,a] = butter(8,[fcInferior/(Fs/2), fcSuperior/(Fs/2)]);
+% x = filter(b,a,x); 
+% excluir os dois primeiros segundos do inicio da coleta 
+x(:,1:2,:) =[]; 
+
+% %encontrar o valor máximo por canal 
+Vmax = squeeze(max(max(abs(x)),[],3));
+ind = Vmax>remoc;
+% 
+% xmedia = squeeze(mean(x(:,~ind,:),2));
+
+  %   eletrodos =
+  % 
+  % 16×2 char array
+  % 
+  %   'FC'
+  %   'F4'
+  %   'T6'
+  %   'P4'
+  %   'T4'
+  %   'Oz'
+  %   'C4'
+  %   'T5'
+  %   'P3'
+  %   'F7'
+  %   'F3'
+  %   'T3'
+  %   'C3'
+  %   'Fz'
+  %   'Pz'
+  %   'Cz'
+% pos_eletrodo= 5;
+pos_eletrodo= 1;
+xmedia = x(:,~ind,pos_eletrodo);
+
+SIGNALS = fft(xmedia,Fs);%*2/nfft*1e9;
+FS = Fs;
+NFFT = Fs;
+SIGNALS = SIGNALS(1:floor(end/2)+1,:); % only half the FFT spectrum is valid
+% f = FS/2*linspace(0,1,NFFT/2+1)'; % only half the FFT spectrum is valid
+% max_length = size(SIGNALS,2);
+Y = SIGNALS;
+Y(59:63,:) = 0;
+all_freqs = [signal_freq_bins noise_freq_bins];
+% SIGNALS = normalize(SIGNALS(:,3:end));
+% SIGNALS = normalize(SIGNALS);
+% SIGNALS = SIGNALS./std(SIGNALS,0,2);
+
+%% Calc thresholds
+% M = floor(size(SIGNALS,2)/Kd);
+if Kd>size(SIGNALS,2)
+    if floor(size(SIGNALS,2)/Mmin)<=1
+        % exame_tem_apenasfloor(size(SIGNALS,2)/Kd))
+
+        % error
+        disp(['Exame curto demais para teste sequencial com MSC! ', ...
+           num2str(size(SIGNALS,2)),' janelas totais.' ])
+        continue
+    end  
+
+    % K = floor(size(SIGNALS,2)/Mmin);
+    K = size(SIGNALS,2);
+    M=Mmin;
+else
+    K = Kd;
+    M = Mmin;
+    SIGNALS = SIGNALS(:,1:K);
+end
+
+Y = SIGNALS;
+Mmin = 32;% 32; usually 32, n minimo de amostras para calc MSC. coincide com tamanho da janela de teste
+NFFT = 1000;
+Njanelas = K+1;
+NpontosTotal = NFFT*Njanelas;
+
+% disjoint:
+% type = 'disjoint';
+% Mstep = Mmin;
+% Kmax_disj = floor(Njanelas/Mmin);
+% Kmax = Kmax_disj;
+% upperlim = Kmax -1;
+% step = 1;
+
+% half-repeating
+type = '50% resample';
+Mstep = round(Mmin/2);
+Kmax_halfrep = round(Njanelas-Mmin/2);
+Kmax = Kmax_halfrep;
+upperlim =  numel(1:Mstep:Njanelas-Mmin);
+step = 1;
+
+% 1-out
+% type = '1-out after min';
+% Mstep = 1;
+% Kmax_1step = Njanelas-Mmin; % = numel(tkf)-1 = numel(tki)
+% Kmax = Kmax_1step;
+% upperlim = Njanelas-Mmin;
+% step = round((Njanelas-Mmin)/Kmax);
+
+
+% Maxtests
+% type = 'every window';
+% Mstep = 1;
+% Kmax = Njanelas;
+% upperlim = Njanelas;
+% step = round((Njanelas)/K);
+
+
+tki = 1:Mstep:Njanelas-Mmin;
+tkf = Mmin:Mstep:Njanelas;
+
+%% resulting dist
+
+for idx = 1:numel(tki)
+    % figure(idx)
+    % stem(abs(Y(:,tki(idx):tkf(idx))))
+    
+    rolling_msc(:,idx) = msc_fft(Y(:,tki(idx):tkf(idx)),Mmin);
+    rolling_beta(:,idx) = betarnd(1,Mmin-1,1,NFFT);
+end
+
+CRMSC = cumsum(rolling_msc,2);
+CRBETA = cumsum(rolling_beta,2);
+
+mu_crmsc = zeros(1,numel(tki));
+mu_crbeta = zeros(1,numel(tki));
+
+normality_crmsc = zeros(1,numel(tki));
+normality_crbeta = zeros(1,numel(tki));
+    
+for idx = 1:numel(tki)
+    % a = normalize(CRMSC(:,idx));
+    a = normalize(CRMSC(1:100,idx));
+    % a = normalize(CRMSC(1:100,idx));
+    % a(a>5*std(a)) = [];
+    b = normalize(CRBETA(:,idx));
+
+    mu_crmsc(idx) = mean(a);
+    mu_crbeta(idx) = mean(b);
+
+    figure(1)
+    subplot(121)
+    h1 = histogram( a , 100);
+    normality_crmsc(idx) = 1 - kstest(a,'alpha', (5/100)/Kmax);
+
+    title(['Test k = ', num2str(idx),' of ', num2str(numel(tki))])
+    xlabel('CRMSC')
+    ylabel('count')
+
+    subplot(122)
+    h2 = histogram( b , 100);
+    normality_crbeta(idx) = 1- kstest(b,'alpha', (5/100)/Kmax);
+
+    xlabel('CRBETA')
+    ylabel('count')
+
+    if rem(idx,25)==0
+        drawnow
+    end
+
+    % pause(0.2)
+end
+
+
+passing_normal_crmsc = mean(normality_crmsc)
+passing_normal_crbeta = mean(normality_crbeta)
+
+%%
+figure
+subplot(2,1,1)
+
+noise_freq_bins = 351:1:451;
+
+hold on
+for i = 1:numel(noise_freq_bins)
+    fo = noise_freq_bins(i); 
+    p1 = plot(cumsum(rolling_msc(fo,:)), 'Color', 0.8*[1 1 1],'Linewidth', 0.8);
+end
+for i = 1:numel(signal_freq_bins)
+    fo = signal_freq_bins(i); 
+    p2 = plot(cumsum(rolling_msc(fo,:)),'Linewidth', 1.2);
+end
+
+legend([p1,p2], 'f(ASSR)', 'f(Noise)', 'Location', 'northwest', 'Fontsize',14)
+ylabel('Acumulated Magnitude-Squared Coherence [\mu V]')
+grid on
+% title(['MSC acumulada por janela, (',type,')',' mean(SNR) = ',num2str(noise_mean)])
+hold off
+
+%%
+subplot(2,1,2)
+if upperlim> size(rolling_msc,2)
+    upperlim = size(rolling_msc,2);
+end
+
+K = Kmax;
+aa = cumsum(rolling_msc(noise_freq_bins,:),2);
+aa = aa(:,1:step:upperlim);
+p1 = boxplot(aa,'Symbol','kx','OutlierSize',5,'Color', 0.7*[1 1 1]);
+hold on
+p2 = plot(quantile(aa,1-5/100), '-', 'Linewidth', 1.2, 'Color',[1 0.4 0.4]);
+
+bb = cumsum(rolling_msc(signal_freq_bins,:),2);
+bb = bb(:,1:step:upperlim);
+p3 = boxplot(bb,'Symbol','bo','OutlierSize',5);
+xlabel(' Time [100 ms]', 'Fontsize', 14)
+ylabel(' Acumulated Magnitude-Squared Coherence [\mu V]')
+
+%%
+figure;
+subplot(211)
+stem(normality_crmsc, 'filled')
+title(['Complement of decision from KS Test (',type,')'], 'Fontsize', 14)
+ylabel('Is CR-MSC normal? [1- pval > 99% / K_{max}]', 'Fontsize', 14)
+ylim([0,1.2])
+grid on
+subplot(212)
+stem(normality_crbeta, 'filled')
+ylabel('Is CR-\beta normal? [1- pval > 99% / K_{max}]', 'Fontsize', 14)
+xlabel('Test index [K]','Fontsize', 14)
+ylim([0,1.2])
+grid on
+end
+end
+=== End eeg_is_normal_LIMPO_25_11.m ===
+
+
+=== Begin get_beta_CGST_thresholds.m ===
+
+function [aThresholds,gThresholds] = get_beta_CGST_thresholds(K, M, alpha )
+%UNTITLED3 Summary of this function goes here
+%   Detailed explanation goes here
+
+    Alpha_k         = ones(1,K)*(alpha/K);    
+    Gamma_k = ((1-alpha)/K).*ones(1,K);
+    Resolution      = (1/0.00001); %(1/0.0001);                 
+    Xvalues         = 0:1/Resolution:1;            
+    Null         	= betapdf(Xvalues, 1, M-1);
+    Null            = Null/sum(Null);            
+    Chi2_Norm       = Null/sum(Null);             
+ 
+    k               = 1;                           
+    aThresholds(k)	= 1 - Alpha_k(k).^(1./(M-1));  
+    gThresholds(k)	= 1-(1- Gamma_k(k)).^(1./(M-1));
+    TruncInd_Ra      = round(aThresholds(k)*Resolution);
+    TruncInd_Rg      = round(gThresholds(k)*Resolution);           
+    
+    for k = 2:K
+        NullTrunc                   = Null;                                                
+        NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));    
+        NullTrunc(1:TruncInd_Rg)    = zeros(1, length(NullTrunc(1:TruncInd_Rg)));
+        
+        Null2                       = conv(Chi2_Norm, NullTrunc);   
+        Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
+
+        TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k)); 
+        aThresholds(k)              = TruncInd_Ra/Resolution;  
+        TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
+        gThresholds(k)              = TruncInd_Rg/Resolution;
+        Null                        = Null2; 
+    end   
+
+end
+=== End get_beta_CGST_thresholds.m ===
+
+
+=== Begin how_much_data.m ===
+
+% OBJ: gerar curva eficiencia de pareto para CGST MSC
+% https://pt.wikipedia.org/wiki/Efici%C3%AAncia_de_Pareto
+
+%% Setup
+clearvars; close all; clc
+
+%% Parametros
+Kmax = 15;      % numero maximo de testes aplicados em sequencia 
+FPd = 0.05;     % taxa de falso positivo desejado para o exame
+
+% Felix, Leonardo Bonato, et al.  (2006)
+% "Statistical aspects concerning signal coherence applied to randomly 
+% modulated periodic signals." IEEE Signal Processing Letters.
+
+vec_volunt = 1:11; % 1:11; % 1:5; %
+vec_intens = [0:5]; % 1:5;  % 3:4; %
+
+%%%%%%%%%%%%
+signal_freq_bins =  [82   90    84    86    88    90    92    94    96];
+noise_freq_bins = 5; % round(signal_freq_bins.*exp(1)/2)+5
+%%%%%%%%%%%%
+
+
+% 
+Mlimite = nan(length(vec_intens), length(vec_volunt), 2);
+for intens = vec_intens
+    for volunt = vec_volunt
+        %% Carrega dados
+        
+        % SET THIS PATH:
+        path = 'C:\PPGEE\SBEB_CBA_24\ASSR - Coleta OFFLINE';
+        addpath(path)
+        %vetor dos voluntários 
+        Vvoluntario = {'Abdon';'Ana';'BBB';'Colatina';'Erick';'Luciana';...
+            'Sombra';'Quenaz';'Vinicius';'Sacola';'Wreikson'}; 
+        
+        %vetor da intensidade 
+        Vintensidade = {'70';'60';'50';'40';'30'}; 
+        load('eletrodos.mat')
+        ganho  = 200;
+        remoc = 0.1/ganho; 
+        
+        voluntario = cell2mat(Vvoluntario(volunt,:));
+        
+        if intens==0
+             load([voluntario 'ESP'], 'x','Fs','binsM','freqEstim') 
+        else
+            intensidade = cell2mat(Vintensidade(intens,:));
+            load([voluntario '_'  intensidade 'dB'], 'x','Fs','binsM','freqEstim') 
+        end
+        
+        nfft = Fs;
+        x = x - repmat(mean(x),nfft,1);
+        x(:,1:2,:) =[]; 
+        
+        % %encontrar o valor máximo por canal 
+        Vmax = squeeze(max(max(abs(x)),[],3));
+        ind = Vmax>remoc;
+        
+        pos_eletrodo= 1;
+        xmedia = x(:,~ind,pos_eletrodo);
+        
+        SIGNALS = fft(xmedia,Fs);%*2/nfft*1e9;
+        FS = Fs;
+        NFFT = Fs;
+        SIGNALS = SIGNALS(1:floor(end/2)+1,:); 
+        Y = SIGNALS;
+        Y(59:63,:) = 0;
+        all_freqs = [signal_freq_bins noise_freq_bins];
+
+        Mlimite(intens+1, volunt, (Fs==1000)+1) = size(SIGNALS,2);
+
+    end
+end
+
+%%
+disp(' Analisando percentis: ')
+percentis = [.2,.25,.3,.4,.6,.8,.95];
+fprintf('%d\t',round(100*percentis))
+disp(' ')
+
+disp('_ Para Fs = 1000 Hz _')
+Mstat = nan(length(vec_intens), length(vec_volunt));
+Mstat = Mlimite(:,:,1);
+
+% duracao_minima_por_intensidade = min(Mstat,[],2,"omitnan")
+% duracao_media_por_intensidade = mean(Mstat,2,"omitnan")
+% duracao_maxima_por_intensidade = max(Mstat,[],2,"omitnan")
+
+duracao_pct_por_intensidade_1000hz = quantile(Mstat,percentis,2)
+desvio_padrao_1000Hz = std(duracao_pct_por_intensidade_1000hz,0,2)
+
+disp('_ Para Fs = 1750 Hz _')
+Mstat = nan(length(vec_intens), length(vec_volunt));
+Mstat = Mlimite(:,:,2);
+
+% duracao_minima_por_intensidade = min(Mstat,[],2,"omitnan")
+% duracao_media_por_intensidade = mean(Mstat,2,"omitnan")
+% duracao_maxima_por_intensidade = max(Mstat,[],2,"omitnan")
+
+duracao_pct_por_intensidade_1750hz = quantile(Mstat,percentis,2)
+desvio_padrao_1750Hz = std(duracao_pct_por_intensidade_1750hz,0,2)
+
+disp('_ Para conjunto total de Fs _')
+Mstat = nan(length(vec_intens), length(vec_volunt));
+Mstat = Mlimite(:,:,1);
+aux = Mlimite(:,:,2);
+Mstat(isnan(Mstat)) = aux(isnan(Mstat));
+
+% duracao_minima_por_intensidade = min(Mstat,[],2)
+% duracao_media_por_intensidade = mean(Mstat,2)
+% duracao_maxima_por_intensidade = max(Mstat,[],2)
+
+duracao_pct_por_intensidade_todos = quantile(Mstat,percentis,2)
+desvio_padrao_todos = std(duracao_pct_por_intensidade_todos,0,2)
+
+
+% Escolha de Mlimite pode ser feita como menor valor que ultrapassa 1 sigma
+num_maiores_que_desvio_padrao = sum(...
+    duracao_pct_por_intensidade_todos-sqrt(var(duracao_pct_por_intensidade_todos,0,2))>0,1);
+
+Mlimite_por_intensidade= floor(duracao_pct_por_intensidade_todos(:,...
+    find(num_maiores_que_desvio_padrao==length(vec_intens),1,'first')))'
+Percentil_contemplado = 100*(1-...
+    percentis(find(num_maiores_que_desvio_padrao==length(vec_intens),1,'first')))
+
+Mlimite_por_intensidade =   [115    58   177   298   475   477];
+
+
+%%
+% 
+% Mmin = 12;       
+% possible_Mstep = [1,2,4,6,8,10,12,16,24,28,30,32,36,40];
+% Mmax = 64;
+% 
+% for current_Mstep = possible_Mstep
+%     % disp(size(Mmin:current_Mstep:Mmax))
+%     disp(floor((Mmax-Mmin)/current_Mstep))
+% end
+
+=== End how_much_data.m ===
+
+
+=== Begin mean_reduce.m ===
+
+function red = mean_reduce(vec,dim)
+    red = squeeze(mean(vec,dim,'omitnan'));
+end
+=== End mean_reduce.m ===
+
+
+=== Begin normaldist_cgst_crmsc_EXAME_LIMPO_25_11.m ===
+
+% OBJ: gerar curva eficiencia de pareto para CGST MSC
+% https://pt.wikipedia.org/wiki/Efici%C3%AAncia_de_Pareto
+
+%useful viz plot:
+% figure; stem(all_freqs,-2*log(Ps(all_freqs)))
+%% Setup
+clearvars; 
+close all
+clc
+
+should_plot = 1;
+%% Parametros
+Kd = 88;           % numero total de testes a aplicar sequencialmente
+FPd = 0.05;      % taxa de falso positivo desejado para o exame
+
+Msample = 0; % best = 32 / 20 a 24
+Mmin = 32; %floor(Msample*0.6);
+Mstep = 32;
+sum_step = Mstep;
+
+NumT = 5e3; 
+Nsinais = NumT;
+
+int_inic =3;
+max_int = 4;
+
+FNRt = nan(11,max_int-int_inic+1, Kd);
+TPRt = nan(11,max_int-int_inic+1, Kd);
+TNRt = nan(11,max_int-int_inic+1, Kd);
+FPRt = nan(11,max_int-int_inic+1, Kd);
+
+for cont_int = int_inic:max_int
+for cont_vol=1:11
+
+% always plot last run
+if cont_int ==max_int
+    if cont_vol==11
+        should_plot = 1;
+    end
+end
+
+
+
+    cont_vol
+
+% REAL: s frequências das portadoras para ambas os ouvidos foram as mesmas: 
+% 500, 1000, 2000,4000 Hz, modulados, respectivamente, nas frequências 
+% 81, 85, 89 e 93 Hz, para o ouvido direito, e 83, 87, 91 e 95 Hz, 
+% para o ouvido esquerdo . - pg 52 tese colatina
+
+signal_freq_bins =  [82  84  86  88    90    92    94    96];
+% noise_freq_bins = 300:1:300+Msample;%440:1:451;
+
+% noise_freq_bins  =  [82  84  86  88    90    92    94    96];
+% signal_freq_bins = 351:1:451;
+
+% 443:1:451;
+noise_freq_bins = 300+round(signal_freq_bins.*exp(1)/2)+5; %[300 400 500]; %
+%%%%%%%%%%%%
+%% Carrega dados
+
+% SET THIS PATH:
+path = 'C:\PPGEE\SBEB_CBA_24\ASSR - Coleta OFFLINE';
+addpath(path)
+%vetor dos voluntários 
+Vvoluntario = {'Abdon';'Ana';'BBB';'Colatina';'Erick';'Luciana';...
+    'Sombra';'Quenaz';'Vinicius';'Sacola';'Wreikson'}; 
+
+%vetor da intensidade 
+Vintensidade = {'70';'60';'50';'40';'30'}; 
+load('eletrodos.mat')
+ganho  = 200;
+remoc = 0.1/ganho; 
+
+voluntario = cell2mat(Vvoluntario(cont_vol,:));
+
+if cont_int<0
+     load([voluntario 'ESP'], 'x','Fs','binsM','freqEstim') 
+else
+    intensidade = cell2mat(Vintensidade(cont_int,:));
+    load([voluntario '_'  intensidade 'dB'], 'x','Fs','binsM','freqEstim') 
+end
+
+nfft = Fs;%1segundo de sinal 
+ 
+%retirar componente DC por janela (fiz isso pq no processamento em
+%tempo real é por janela)
+x = x - repmat(mean(x),nfft,1); %tirar a média de cada de cada trecho - devido a remoção
+
+% meu
+% fcInferior = 70;
+% fcSuperior = 100;
+
+
+% d1 = designfilt('bandstopiir','FilterOrder',4, ...
+%                'HalfPowerFrequency1',59,'HalfPowerFrequency2',61, ...
+%                'DesignMethod','butter','SampleRate',Fs);
+
+
+% Em seguida, os sinais foram filtrados digitalmente por um filtro
+% Butterworth passa-banda de oitava ordem com frequência de corte de 1 Hz 
+% acima e abaixo da frequência de modulação (Antunese Felix, 2019).
+% - pg 53, tese colatina
+% fcInferior = min(signal_freq_bins)-1;
+% fcSuperior = max(signal_freq_bins)+1;
+% d2 = designfilt('bandpassiir','FilterOrder',8, ...
+%     'HalfPowerFrequency1',fcInferior,'HalfPowerFrequency2',fcSuperior, ...
+%     'DesignMethod','butter','SampleRate',Fs);
+
+% x = filtfilt(d1,x);
+% x = filtfilt(d2,x);
+
+%colatina
+fcInferior = 70; % 70
+fcSuperior = Fs/2 -1; % 100
+[b,a] = butter(8,[fcInferior/(Fs/2), fcSuperior/(Fs/2)]);
+x = filter(b,a,x); 
+% excluir os dois primeiros segundos do inicio da coleta 
+x(:,1:2,:) =[]; 
+
+% %encontrar o valor máximo por canal 
+Vmax = squeeze(max(max(abs(x)),[],3));
+ind = Vmax>remoc;
+% 
+% xmedia = squeeze(mean(x(:,~ind,:),2));
+
+  %   eletrodos =
+  % 
+  % 16×2 char array
+  % 
+  %   'FC'
+  %   'F4'
+  %   'T6'
+  %   'P4'
+  %   'T4'
+  %   'Oz'
+  %   'C4'
+  %   'T5'
+  %   'P3'
+  %   'F7'
+  %   'F3'
+  %   'T3'
+  %   'C3'
+  %   'Fz'
+  %   'Pz'
+  %   'Cz'
+% pos_eletrodo= 5;
+pos_eletrodo= 1;
+xmedia = x(:,~ind,pos_eletrodo);
+
+SIGNALS = fft(xmedia,Fs);%*2/nfft*1e9;
+FS = Fs;
+NFFT = Fs;
+SIGNALS = SIGNALS(1:floor(end/2)+1,:); % only half the FFT spectrum is valid
+% f = FS/2*linspace(0,1,NFFT/2+1)'; % only half the FFT spectrum is valid
+% max_length = size(SIGNALS,2);
+
+all_freqs = [signal_freq_bins noise_freq_bins];
+% SIGNALS = normalize(SIGNALS(:,3:end));
+% SIGNALS = normalize(SIGNALS);
+% SIGNALS = SIGNALS./std(SIGNALS,0,2);
+
+%% Calc thresholds
+% M = floor(size(SIGNALS,2)/Kd);
+if Kd>size(SIGNALS,2)
+    if floor(size(SIGNALS,2)/Mmin)<=1
+        % exame_tem_apenasfloor(size(SIGNALS,2)/Kd))
+
+        % error
+        disp(['Exame curto demais para teste sequencial com MSC! ', ...
+           num2str(size(SIGNALS,2)),' janelas totais.' ])
+        continue
+    end  
+
+    % K = floor(size(SIGNALS,2)/Mmin);
+    K = size(SIGNALS,2);
+    M=Mmin;
+else
+    K = Kd;
+    M = Mmin;
+    SIGNALS = SIGNALS(:,1:K);
+end
+
+
+TotalAlpha      = FPd;                        
+Alpha_k         = ones(1,K)*(TotalAlpha/K);     
+Gamma_k         = ((1-TotalAlpha)/K).*ones(1,K);
+% Alpha_k = exp(10*linspace(TotalAlpha/K, TotalAlpha, K));
+% Alpha_k = flip((TotalAlpha.*Alpha_k./sum(Alpha_k)));
+% Alpha_k = (TotalAlpha.*Alpha_k./sum(Alpha_k));
+% Gamma_k = exp(linspace((1-TotalAlpha)/K, 1-TotalAlpha, K));
+% Gamma_k = flip((1-TotalAlpha).*Gamma_k./sum(Gamma_k));
+% Gamma_k = (1-TotalAlpha).*Gamma_k./sum(Gamma_k);
+% Gamma_k = 0.01.*ones(1,K);
+% Gamma_k(end) = 1-sum(Gamma_k(1:end-1))-TotalAlpha;
+
+% aThresholds  = zeros(1,K);
+% gThresholds  = zeros(1,K);
+
+% primeiro = SIGNALS(:,1:Msample);
+
+
+% accp = zeros(NFFT/2+1, Msample);
+% for k=Mmin+1:Msample
+%     if k-M<=0
+%         ind_inicial = 1;
+%         ind_final = k;
+%         recorte = SIGNALS(:,ind_inicial:ind_final);
+%         Matual = k;
+%     else
+%         ind_final = k;
+%         ind_inicial = ind_final-Mmin+1;
+%         recorte = primeiro(:,ind_inicial:ind_final);
+%         Matual = M;
+%     end
+% 
+%     % ind_inicial = M*(k-1)+1;
+%     % ind_final = ind_inicial+M-1;
+%     accp(:,k) = msc_fft(recorte,Matual);
+% end
+
+
+% freq = 1:500;
+% freq(signal_freq_bins) = [];
+% h0 = sum(accp(noise_freq_bins,:),2);
+% h0 = accp(freq,:);
+% muk1=mean(h0);
+% sigmak1=std(h0);
+
+% primeiro = msc_fft(primeiro,Msample);
+% muk1=mean(primeiro(noise_freq_bins));
+% sigmak1=std(primeiro(noise_freq_bins));
+
+
+Resolution      = (1/0.001);                  
+Xvalues         = 0:1/Resolution:15;            
+Null         	= betapdf(Xvalues, 1, M-1); %normpdf(Xvalues,muk1,sigmak1);% normpdf(Xvalues,0,0.05); %normpdf(Xvalues,0.05,0.3); 
+Null            = Null/sum(Null);             	
+Chi2_Norm       = Null/sum(Null);             	
+k               = 1;                            
+aThresholds(k)	= 1 - Alpha_k(k).^(1./(M-1));  % quantile(betarandn(1,1e5), 1-Alpha_k(1)); %
+gThresholds(k)	= 1-(1- Gamma_k(k)).^(1./(M-1)); % quantile(randn(1,1e5), Gamma_k(1));
+TruncInd_Ra      = round(aThresholds(k)*Resolution);                                         
+TruncInd_Rg      = round(gThresholds(k)*Resolution);           
+
+for k = 2:K
+    % disp(k)
+    NullTrunc                   = Null;                                                     
+    NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));              
+    NullTrunc(1:TruncInd_Rg)    = zeros(1, length(NullTrunc(1:TruncInd_Rg)));
+    Null2                       = conv(Chi2_Norm, NullTrunc);                              
+    Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
+    TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k));            
+    aThresholds(k)              = TruncInd_Ra/Resolution;                                    
+    TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
+    gThresholds(k)              = TruncInd_Rg/Resolution;
+    Null                        = Null2;
+end
+
+
+%% Plot thresholds
+disp('')
+disp('--------------------------------')
+scr_siz = get(0,'ScreenSize') ;
+
+if should_plot
+    % floor([0.5*scr_siz(3)/2 0.6*scr_siz(4)/2 1.2*scr_siz(3)/2 1.2*scr_siz(4)/2])
+    f=figure(1);
+    f.Position =floor([100 100 1.5*scr_siz(3)/2 1.5*scr_siz(4)/2]);
+    subplot(121)
+    cv_max = max([aThresholds, gThresholds]);
+    area([0,M],[1.2*cv_max,1.2*cv_max], 'FaceColor',[0.8500 0.3250 0.0980], 'FaceAlpha',0.1)
+    hold on
+    grid on
+    area([M,K],[1.2*cv_max,1.2*cv_max], 'FaceColor',[0 0.4470 0.7410], 'FaceAlpha',0.1)            
+    
+    dim = [0.14 0.75 0.1 0.1];
+    str = {'Data collection', ['[M_{min}= ',num2str(M),']']};
+    ta = annotation('textbox',dim,'String',str, ...
+        'FitBoxToText','on', 'FontSize',12);
+    ta.FaceAlpha = 0.2;
+    ta.EdgeColor = [0.8500 0.3250 0.0980];  
+    ta.BackgroundColor = [0.8500 0.3250 0.0980];  
+    ta.Color = [.2 .2 .2]; 
+    
+    dim = [0.225 0.75 0.1 0.1];
+    str = {'Test region'};
+    tb = annotation('textbox',dim,'String',str, ...
+        'FitBoxToText','on', 'FontSize',12);
+    tb.FaceAlpha = 0.2;  
+    tb.EdgeColor = [0 0.4470 0.7410]; 
+    tb.BackgroundColor = [0 0.4470 0.7410]; 
+    tb.Color = [.2 .2 .2]; 
+end
+
+
+
+
+%signal freqs
+random_exam = zeros(numel(signal_freq_bins),K);
+hit = zeros(1,K);
+miss= zeros(1,K);
+
+% c = 0.7*lines(numel(signal_freq_bins)); % sky, hot, turbo, parula, cool,
+% spring
+c = 0.9*gray(numel(signal_freq_bins));
+
+for idx_freq = 1:numel(signal_freq_bins)
+    
+    flag = 1;
+    for k=Mmin+1:K
+        if k-M<=0
+            ind_inicial = 1;
+            ind_final = k*Mstep;
+            recorte = SIGNALS(:,ind_inicial:ind_final);
+            Matual = k;
+        else
+            ind_final = k;
+            ind_inicial = ind_final-M+1;
+            recorte = SIGNALS(:,ind_inicial:ind_final);
+            Matual = M;
+        end
+
+        % ind_inicial = M*(k-1)+1;
+        % ind_final = ind_inicial+M-1;
+        Ps = msc_fft(recorte,Matual);
+        random_exam(idx_freq,k) = Ps(signal_freq_bins(idx_freq));
+
+        if sum(random_exam(idx_freq,Mmin:sum_step:k)) >= aThresholds(idx_freq) && flag && k>=Msample
+            hit(k) = hit(k)+1;
+            last_k = k;
+            final_v = sum(random_exam(idx_freq,1:k));
+            flag = 0;
+            
+            % break
+        elseif sum(random_exam(idx_freq,Mmin:sum_step:k)) <= gThresholds(idx_freq) && flag && k>=Msample
+            miss(k) = miss(k)+1;
+            last_k = k;
+            final_v = sum(random_exam(idx_freq,1:k));
+            flag = 0;
+            
+            % break
+        end
+    end
+
+    if should_plot
+        
+        plot(Mmin:sum_step:K, cumsum(random_exam(idx_freq,Mmin:sum_step:end)),'--', ...
+            'LineWidth',1.5, 'Color', c(idx_freq,:))
+        hold on 
+        plot(Mmin:sum_step:K, cumsum(random_exam(idx_freq,Mmin:sum_step:end)),'.', ...
+            'MarkerSize',12, 'Color', c(idx_freq,:))
+    end
+end
+
+if should_plot
+    subplot(121)
+    colormap(c)
+    cb = colorbar;
+    cb.TickLabels = signal_freq_bins(round(linspace(1,numel(signal_freq_bins),11)));
+    
+    % p4 = plot(last_k, final_v,'o','MarskerSize',7, 'LineWidth',2,'Color',"#0072BD");
+    
+    p1 = plot(Mmin:K+Mmin-1, aThresholds, 'LineWidth',1.8, 'Color',"#77AC30"); %[0 0.4470 0.7410]);
+    p2 = plot(Mmin:K+Mmin-1, gThresholds,'LineWidth',1.8, 'Color',"#A2142F");%[0.8500 0.3250 0.0980]);
+    
+    title(['Critical values for coherence-based early stopping exam with ',...
+        num2str(round(100*FPd)),'% significance'], 'FontSize', 18)
+    % legend([p1,p2],'Detection [ \alpha_k ]', 'Futility [ \gamma_k ]', ...
+        % 'Fontsize', 15, 'Location', 'SouthEast', 'AutoUpdate', 'off')
+    ylabel('\Sigma_1^k MSC  [summary statistic]', 'Fontsize', 20)
+    xlabel('Exam k-th epoch [seconds]', 'Fontsize', 20)
+    % c = 0.7*hot(numel(signal_freq_bins));
+    
+    xlim([0,K])
+    ylim([0,1.05*cv_max])
+    hold off
+    drawnow
+
+end
+
+
+FNRs = miss/numel(signal_freq_bins);
+TPRs = hit/numel(signal_freq_bins);
+FNRt(cont_vol,cont_int-int_inic+1,1:K) = FNRs;
+TPRt(cont_vol,cont_int-int_inic+1,1:K) = TPRs;
+
+if should_plot
+%noise freqs
+c2 = 0.9*gray(numel(noise_freq_bins));
+subplot(122)
+cv_max = max([aThresholds, gThresholds]);
+    area([0,M],[1.2*cv_max,1.2*cv_max], 'FaceColor',[0.8500 0.3250 0.0980], 'FaceAlpha',0.1)
+    hold on
+    grid on
+    area([M,K],[1.2*cv_max,1.2*cv_max], 'FaceColor',[0 0.4470 0.7410], 'FaceAlpha',0.1)            
+    
+    dim = [0.14 0.75 0.1 0.1];
+    str = {'Data collection', ['[M_{min}= ',num2str(M),']']};
+    ta = annotation('textbox',dim,'String',str, ...
+        'FitBoxToText','on', 'FontSize',12);
+    ta.FaceAlpha = 0.2;
+    ta.EdgeColor = [0.8500 0.3250 0.0980];  
+    ta.BackgroundColor = [0.8500 0.3250 0.0980];  
+    ta.Color = [.2 .2 .2]; 
+    
+    dim = [0.225 0.75 0.1 0.1];
+    str = {'Test region'};
+    tb = annotation('textbox',dim,'String',str, ...
+        'FitBoxToText','on', 'FontSize',12);
+    tb.FaceAlpha = 0.2;  
+    tb.EdgeColor = [0 0.4470 0.7410]; 
+    tb.BackgroundColor = [0 0.4470 0.7410]; 
+    tb.Color = [.2 .2 .2]; 
+end
+
+random_exam = zeros(numel(noise_freq_bins),K);
+hit = zeros(1,K);
+miss= zeros(1,K);
+
+for idx_freq = 1:numel(noise_freq_bins)
+    flag = 1;
+    for k=Mmin+1:K
+        if k-M<=0
+            ind_inicial = 1;
+            ind_final = k;
+            recorte = SIGNALS(:,ind_inicial:ind_final);
+            Matual = k;
+        else
+            ind_final = k;
+            ind_inicial = ind_final-M+1;
+            recorte = SIGNALS(:,ind_inicial:ind_final);
+            Matual = M;
+        end
+    
+        % ind_inicial = M*(k-1)+1;
+        % ind_final = ind_inicial+M-1;
+        Ps = msc_fft(recorte,Matual);
+        random_exam(idx_freq,k) = Ps(noise_freq_bins(idx_freq));
+    
+        if sum(random_exam(idx_freq,Mmin:k)) >= aThresholds(k) && flag && k>=Msample
+            hit(k) = hit(k)+1;
+            last_k = k;
+            final_v = sum(random_exam(idx_freq,1:sum_step:k));
+            flag = 0;
+            
+            % break
+        elseif sum(random_exam(idx_freq,Mmin:k)) <= gThresholds(k) && flag && k>=Msample
+            miss(k) = miss(k)+1;
+            last_k = k;
+            final_v = sum(random_exam(idx_freq,1:sum_step:k));
+            flag = 0;
+            
+            % break
+        end
+    
+        
+    end
+    if should_plot
+            plot(Mmin:sum_step:K, cumsum(random_exam(idx_freq,Mmin:sum_step:end)),'--', ...
+                'LineWidth',1.5, 'Color', c2(idx_freq,:))
+            hold on
+            plot(Mmin:sum_step:K, cumsum(random_exam(idx_freq,Mmin:sum_step:end)),'.', ...
+                'MarkerSize',12, 'Color', c2(idx_freq,:))
+        end
+end
+
+if should_plot
+    colormap(c2)
+    cb = colorbar;
+    cb.TickLabels = noise_freq_bins(round(linspace(1,numel(noise_freq_bins),11)));
+    
+    % p4 = plot(last_k, final_v,'o','MarskerSize',7, 'LineWidth',2,'Color',"#0072BD");
+    
+    p1 = plot(Mmin:K+Mmin-1, aThresholds, 'LineWidth',1.8, 'Color',"#77AC30"); %[0 0.4470 0.7410]);
+    hold on 
+    p2 = plot(Mmin:K+Mmin-1, gThresholds,'LineWidth',1.8, 'Color',"#A2142F");%[0.8500 0.3250 0.0980]);
+    
+    % title(['Critical values for coherence-based early stopping exam with ',...
+    %     num2str(round(100*FPd)),'% significance'], 'FontSize', 18)
+    legend([p1,p2],'Detection [ \alpha_k ]', 'Futility [ \gamma_k ]', ...
+        'Fontsize', 15, 'Location', 'NorthWest', 'AutoUpdate', 'off')
+    ylabel('\Sigma_1^k MSC  [summary statistic]', 'Fontsize', 20)
+    xlabel('Exam k-th epoch [seconds]', 'Fontsize', 20)
+    % c = 0.7*hot(numel(signal_freq_bins));
+    
+    xlim([0,K])
+    ylim([0,1.05*cv_max])
+    hold off
+
+    drawnow
+    pause(0.1)
+end
+
+
+
+TNRs = miss/numel(noise_freq_bins);
+FPRs = hit/numel(noise_freq_bins);
+TNRt(cont_vol,cont_int-int_inic+1,1:K) = TNRs;
+FPRt(cont_vol,cont_int-int_inic+1,1:K) = FPRs;
+
+end
+
+mTP = mean(TPRt,3,'omitnan')
+mFP = mean(FPRt,3,'omitnan')
+mFN = mean(FNRt,3,'omitnan')
+mTN = mean(TNRt,3,'omitnan')
+
+
+end
+%%
+% Taxa de deteccao media por estágio para cada intensidade:
+pd_k =  squeeze(mean(TPRt,1, 'omitnan')); % intensidade = linhas, estagio = colunas
+
+% Taxa de deteccao total por intensidade:
+PD = round(100*sum(pd_k,2),2);
+
+% similarmente para outros:
+fp_k = squeeze(mean(FPRt,1,'omitnan'));
+tn_k = squeeze(mean(TNRt,1,'omitnan'));
+fn_k = squeeze(mean(FNRt,1,'omitnan'));
+
+FP = round(100*sum(fp_k,2),2);
+TN = round(100*sum(tn_k,2),2);
+FN = round(100*sum(fn_k,2),2);
+
+% mostrar resultados:
+Resultados = table(cell2mat(Vintensidade(int_inic:max_int)), PD,FP, TN, FN, ...
+    'VariableNames',{'Intensidade [dB]', ...
+    'PD [%]', 'FP \alpha [%]', ...
+    'TN [%]', 'FN [%] \beta'});
+fprintf('\n\n\n')
+disp(Resultados)
+
+
+% fp_final = mean(FPRt,'all')
+% pd_final = mean(TPRt,'all')
+% mean(FNRt,'all')
+% mean(TNRt,'all')
+
+%% mostrar resultados 
+hit = 100*pd_k;
+miss = 100*fp_k;
+
+%clc
+%1 - Falsos Positivo  
+figure 
+plot(hit,'.k','MarkerSize',10)
+hold on 
+plot([0 size(hit,2)],[hit(end) hit(end)], ':r','LineWidth',2)
+ylabel('Taxa de Detecção','fontsize',12)
+grid on
+
+
+%2 - Taxa de detecção 
+FP_desejado = sum(Alpha_k);
+figure 
+plot(miss,'.k','MarkerSize',10)
+hold on 
+plot([0 size(miss,2)],[100*FP_desejado 100*FPd], ':r','LineWidth',2)
+ylabel('Falso Positivo','fontsize',12)
+
+figure
+boxplot(miss)
+hold on
+plot([0 size(miss,2)],[100*FP_desejado 100*FPd], ':r','LineWidth',2)
+
+=== End normaldist_cgst_crmsc_EXAME_LIMPO_25_11.m ===
+
+
+=== Begin pareto_completo_betamsc_cgst.m ===
+
+% OBJ: gerar curva eficiencia de pareto para CGST MSC
+% https://pt.wikipedia.org/wiki/Efici%C3%AAncia_de_Pareto
+
+%% Setup
+clearvars; close all; clc
+
+%% Parametros de deteccao
+FPd = 0.05;     % taxa de falso positivo desejado para o exame
+
+% 1. Felix, Leonardo Bonato, et al.  (2006)
+% "Statistical aspects concerning signal coherence applied to randomly 
+% modulated periodic signals." IEEE Signal Processing Letters.
+% 2. colatina
+vec_volunt = 1:11; %4:7; %[1 2 3]; % [1 5 11]; % 1:11; % 1:5; %
+% vec_intens = [1 3];  % [1 3 6]; %[1 3:6]; %1:6; % 0:5;  % 3:4; %
+%                        % pulando intensidade 2 = 60 dB pois Mlimite = 50
+
+% {'70dB';'60dB';'50dB';'40dB';'30dB';'ESP'}
+vec_intens = [1 3 5]; % selecionando mesmos que colatina faster 2020
+
+
+% Add citacao colatina
+signal_freq_bins = [82    84    86    88    90    92    94    96];
+noise_freq_bins  = 351:12:439; %351:1:451; 
+freq_bins = [signal_freq_bins, noise_freq_bins];
+
+%% Parametros de duracao:
+% Em duvida, ver:
+% "estudo_combinacoes_razoaveis_dados_colatina.m", e % "how_much_data.m"
+Mlimite = [115,   58,  177,  298,  475,  477 ];
+Mmin = 10; % 12 
+Mmax = 58;
+Mexpl= 10;
+vec_M = [10 16 20 24 30 40]; %10:4:48; % Mmin:Mexpl:Mmax;
+% vec_M = [10, 20, 40];
+
+% limita para Mmax onde Mlimite>Mmax selecionado
+Mlimite(Mlimite >Mmax) = Mmax;
+
+%
+Mlimite(Mlimite <min([vec_M,Mmin])) = Mmin;
+
+Klimite_desejado = 50;
+Kexpl = 5;
+Kmin = [3,     3    ,   3,    3,    3,    3]; 
+Kmax =  min(Mlimite,Klimite_desejado);
+Mstep_min = floor(Mlimite./Kmax); % 1 sempre
+Mstep_max = floor(Mlimite./Kmin); % depende to N max de teste e t max exame 
+
+% Rever como padronizar o tamanho do vec_K, caso contrario as tabelas 
+% terao tamanhos variaveis (quebra o codigo)
+% entao, atualmente usando apenas intensidades que respeitam Kmax = 100
+vec_K = [5,15,25,35,40];% Kmin(1):Kexpl:Kmax(1);
+% Kmax = Klimite_desejado;
+Kmax = max(vec_K);
+
+disjoint_percentage = [0,10,20,30,40,50,80,100]./100;
+
+Mstep_values = zeros(length(Mstep_max), length(disjoint_percentage));
+for idx = 1:numel(disjoint_percentage)
+    current_disjoint_percentage = disjoint_percentage(idx);
+    switch current_disjoint_percentage
+        case 1
+            Mstep_values(:,idx) = Mstep_max;
+        case 0
+            Mstep_values(:,idx) = ones(size(Mstep_values(1)));
+        otherwise
+            Mstep_values(:,idx) = round(Mstep_max.*current_disjoint_percentage);
+    end
+end
+
+
+%% Executar testes
+
+t_decisao = zeros(...
+    numel(vec_intens),...
+    numel(vec_volunt),...
+    numel(vec_M),...
+    numel(Mstep_values),...
+    Kmax,...
+    numel(freq_bins)...
+    );
+
+TP = zeros(...
+    numel(vec_intens),...
+    numel(vec_volunt),...
+    numel(vec_M),...
+    numel(Mstep_values),...
+    Kmax,...
+    numel(freq_bins) ...
+    );
+FP = TP;
+TN = TP;
+FN = TP;
+
+lambda = 0.3372*1.2;
+
+disp(['Duracao minima estimada em minutos = '...
+    num2str(numel(vec_intens)*numel(vec_volunt)*numel(vec_M)*...
+    numel(Mstep_values)*numel(vec_K)*lambda/(60))])
+
+disp(['Duracao minima estimada em horas = '...
+    num2str(numel(vec_intens)*numel(vec_volunt)*numel(vec_M)*...
+    numel(Mstep_values)*numel(vec_K)*lambda/(60*60))])
+
+disp('_____________________________________')
+
+disp(['Duracao pessimista estimada em minutos = '...
+    num2str(numel(vec_intens)*numel(vec_volunt)*numel(vec_M)*...
+    numel(Mstep_values)*numel(vec_K)*(lambda+lambda^2)/(60))])
+
+disp(['Duracao pessimista estimada em horas = '...
+    num2str(numel(vec_intens)*numel(vec_volunt)*numel(vec_M)*...
+    numel(Mstep_values)*numel(vec_K)*(lambda+lambda^2)/(60*60))])
+
+disp('_____________________________________')
+
+disp(['Duracao P>95% estimada em minutos = '...
+    num2str(numel(vec_intens)*numel(vec_volunt)*numel(vec_M)*...
+    numel(Mstep_values)*numel(vec_K)*1.456/(60))])
+
+disp(['Duracao P>95% estimada em horas = '...
+    num2str(numel(vec_intens)*numel(vec_volunt)*numel(vec_M)*...
+    numel(Mstep_values)*numel(vec_K)*1.456/(60*60))])
+
+% PESSIMO!
+% [t_decisao,TP,FP,TN,FN] = f_pareto(intens, volunt, M, %disj, K,freq_bins)
+% Nao estou convencido que vale a pena 
+
+tempos = nan(numel(vec_intens),numel(vec_volunt),numel(vec_M),...
+    numel(Mstep_values),numel(vec_K));
+t1 = tic;
+for idx_intens = 1:numel(vec_intens)
+    % approx 20seg max por loop
+    for idx_volunt = 1:numel(vec_volunt)
+
+        % Carrega dados (deveria ser programacao dinamica, custo atoa aqui)
+        SIGNALS = terrible_load(vec_intens(idx_intens), ...
+                        vec_volunt(idx_volunt)); %(intens, volunt);
+        
+        for idx_M = 1:numel(vec_M)
+            for idx_Mstep = 1:numel(Mstep_values)
+                for idx_K = 1:numel(vec_K) 
+                    t2 = tic;
+
+                    % Run CGST test
+                    [t_decisaoi,TPi,FPi,TNi,FNi] = run_betamsc_cgst_RATE(...
+                        vec_intens(idx_intens), ...
+                        vec_volunt(idx_volunt), ...
+                        vec_M(idx_M), ...
+                        Mstep_values(idx_Mstep), ...
+                        vec_K(idx_K), ...
+                        Kmax,...
+                        signal_freq_bins, ...
+                        noise_freq_bins, ...
+                        SIGNALS);
+    
+                    % Store results 
+                     t_decisao(idx_intens, idx_volunt, idx_M, idx_Mstep,:,:) = t_decisaoi;
+                     TP(idx_intens, idx_volunt, idx_M, idx_Mstep,:,:) = TPi;
+                     FP(idx_intens, idx_volunt, idx_M, idx_Mstep,:,:) = FPi;
+                     TN(idx_intens, idx_volunt, idx_M, idx_Mstep,:,:) = TNi;
+                     FN(idx_intens, idx_volunt, idx_M, idx_Mstep,:,:) = FNi;
+
+                tempos(idx_intens, idx_volunt, idx_M, idx_Mstep,idx_K) = toc(t2);
+                end
+            end
+        end
+
+        figure(1)
+        histogram(tempos(:),'normalization','probability')
+        disp(quantile(tempos(:),0.95))
+        drawnow
+        
+    end
+end
+disp('Tempo total')
+toc(t1) 
+
+disp('Tempo por iteracao (exame)')
+mean(tempos, 'all', 'omitnan')
+%% Sanity check
+
+
+% TP = zeros(...
+%     numel(vec_intens),...
+%     numel(vec_volunt),...
+%     numel(vec_M),...
+%     numel(Mstep_values),...
+%     Kmax,...
+%     numel(freq_bins) ...
+%     );
+
+TXD = sum_reduce(sum_reduce(sum_reduce(TP,6),1),1);
+TXD = 100*TXD./(numel(vec_volunt)*numel(vec_intens)*numel(signal_freq_bins));
+
+
+TXD_on_exam = mean_reduce(TXD, 3); % sum mean detection over diferent stages
+
+TXD_mean_over_M = mean_reduce(TXD, 1); % sum mean detection over diferent stages
+
+TXD_mean_over_all = mean_reduce(mean_reduce(mean_reduce(TXD, 1), 1)', 1);
+
+
+%% Mesmo para fp
+
+TXF = sum_reduce(sum_reduce(sum_reduce(FP,6),1),1);
+TXF = 100*TXF./(numel(vec_volunt)*numel(vec_intens)*numel(noise_freq_bins   )) ;
+
+
+TXF_on_exam = mean_reduce(TXF, 3); % sum mean detection over diferent stages
+
+TXF_mean_over_M = mean_reduce(TXF, 1); % sum mean detection over diferent stages
+
+TXF_mean_over_all = mean_reduce(mean_reduce(mean_reduce(TXF, 1), 1)', 1);
+
+
+%% Para duracao
+
+t = t_decisao;
+t(t<0) = -1*t(t<0);
+% t(t>0) = find(t>0);
+% t(t<0) = find(t<0);
+t(t==0) = NaN;
+
+t = mean_reduce(mean_reduce(mean_reduce(t,6),1),1);
+% t = 100*t./(numel(vec_volunt)*numel(vec_intens)*numel(signal_freq_bins)) 
+
+
+t_on_exam = mean_reduce(t, 3); % sum mean detection over diferent stages
+
+t_mean_over_M = mean_reduce(t, 2)'; % sum mean detection over diferent stages
+
+t_mean_over_all = mean_reduce(mean_reduce(mean_reduce(t, 1), 1)', 1);
+    
+
+%%
+figure
+subplot(121)
+plot(TXD(:), t(:),'b.', 'MarkerSize',10)
+xlabel('Mean detection rate [%]', 'FontSize',16)
+ylabel('Mean exam duration [s]', 'FontSize',16)
+title('TP Pareto', 'FontSize',14)
+grid on 
+
+subplot(122)
+plot(TXF(:), t(:),'rx', 'MarkerSize',10)
+xlabel('Mean false positive rate [%]', 'FontSize',16)
+ylabel('Mean exam duration [s]', 'FontSize',16)
+title('FP Pareto', 'FontSize',14)
+grid on
+%%
+figure
+plot3(TXD(:),TXF(:),t(:),'.')
+xlabel('Mean detection rate [%]', 'FontSize',16)
+ylabel('Mean false positive rate [%]', 'FontSize',16)
+zlabel('Mean exam duration [s]', 'FontSize',16)
+grid on
+%%
+% TXF_mstep = mean_reduce(mean_reduce(TXF,3),1);
+TXD_mstep = mean_reduce(mean_reduce(TXD,3),1);
+t_mstep = mean_reduce(mean_reduce(t,3),1);
+% plot3(TXF_mstep(:),Mstep_values(:),t_mstep(:),'.')
+% [TXD_mstep(:),TXF_mstep(:),Mstep_values(:),t_mstep(:)]
+% grid on
+
+figure
+subplot(121)
+plot3(TXD_mstep(:),Mstep_values(:),t_mstep(:),'b.', 'MarkerSize',10)
+xlabel('Mean detection rate [%]', 'FontSize',16)
+ylabel('Number of samples per epoch [Mmin]', 'FontSize',16)
+zlabel('Mean exam duration [mins]', 'FontSize',16)
+title('TP Pareto', 'FontSize',14)
+grid on
+
+subplot(122)
+plot3(TXF_mstep(:),Mstep_values(:),t_mstep(:),'rx', 'MarkerSize',10)
+xlabel('Mean false positive rate [%]', 'FontSize',16)
+ylabel('Sample/time increment  between tests [Mstep]', 'FontSize',16)
+zlabel('Mean exam duration [mins]', 'FontSize',16)
+title('FP Pareto', 'FontSize',14)
+grid on
+
+disp('TXDetec, TXFalsoP, Mstep, tempo_medio')
+[TXD_mstep(:),TXF_mstep(:),Mstep_values(:),t_mstep(:)]
+
+%%
+
+
+TXF_m = mean_reduce(mean_reduce(TXF,2),2);
+TXD_m = mean_reduce(mean_reduce(TXD,2),2);
+t_m = mean_reduce(mean_reduce(t,2),2);
+
+figure
+subplot(121)
+plot3(TXD_m(:),vec_M(:),t_m(:),'b.', 'MarkerSize',10)
+xlabel('Mean detection rate [%]', 'FontSize',16)
+ylabel('Number of samples per epoch [Mmin]', 'FontSize',16)
+zlabel('Mean exam duration [mins]', 'FontSize',16)
+title('TP Pareto', 'FontSize',14)
+grid on
+
+subplot(122)
+plot3(TXF_m(:),vec_M(:),t_m(:),'rx', 'MarkerSize',10)
+xlabel('Mean false positive rate [%]', 'FontSize',16)
+ylabel('Number of samples per epoch [Mmin]', 'FontSize',16)
+zlabel('Mean exam duration [mins]', 'FontSize',16)
+title('FP Pareto', 'FontSize',14)
+grid on
+
+disp('TXDetec, TXFalsoP, Mmin, tempo_medio')
+[TXD_m(:),TXF_m(:),vec_M(:),t_m(:)]
+
+%%
+TXF_k = mean_reduce(mean_reduce(TXF,1),1);
+TXD_k = mean_reduce(mean_reduce(TXD,1),1);
+t_k = mean_reduce(mean_reduce(t,1),1);
+
+figure
+subplot(121)
+plot3(TXD_k(:),1:Kmax,t_k(:),'b.', 'MarkerSize',10)
+xlabel('Mean detection rate [%]', 'FontSize',16)
+ylabel('Number of tests [K]', 'FontSize',16)
+zlabel('Mean exam duration [mins]', 'FontSize',16)
+title('TP Pareto', 'FontSize',14)
+grid on
+
+subplot(122)
+plot3(TXF_k(:),1:Kmax,t_k(:),'rx', 'MarkerSize',10)
+xlabel('Mean false positive rate [%]', 'FontSize',16)
+ylabel('Number of tests [K]', 'FontSize',16)
+zlabel('Mean exam duration [mins]', 'FontSize',16)
+title('FP Pareto', 'FontSize',14)
+grid on
+
+disp('TXDetec, TXFalsoP, K, tempo_medio')
+[TXD_k(:),TXF_k(:),[1:Kmax]',t_k(:)]
+
+
+%% Salvar resultados
+save('backup5_pareto_completo_betamsc_cgst.mat')
+
+%%
+% Get the linear index of the 
+linearIndex = find(TXF>5);
+% Convert linear index to subscript
+[b_M, b_Mstep, b_Kmax,vals] = ind2sub(size(TXF), linearIndex);
+figure
+subplot(131)
+histogram(b_Mstep, 'normalization', 'probability')
+subplot(132)
+histogram(b_Kmax, 'normalization', 'probability')
+subplot(133)
+histogram(b_M, 'normalization', 'probability')
+
+%%
+
+t_pareto = t_decisao;
+t_pareto(t_pareto<0) = -1*t_pareto(t_pareto<0);
+t_pareto(t_pareto==0) = NaN;
+
+t_pareto = mean_reduce(mean_reduce(t_pareto,6),2);
+TXD_pareto = sum_reduce(sum_reduce(TP,6),2);
+TXD_pareto = 100*TXD_pareto./(numel(vec_volunt)*numel(signal_freq_bins));
+
+TXD_pareto = TXD_pareto(2,:,:,:);
+t_pareto = t_pareto(2,:,:,:);
+
+[ p, idxs] = paretoFront([TXD_pareto(:),(-t_pareto(:))] ); 
+auxL = p(:,1)<0.5; 
+p(auxL,:) = [];
+idxs(auxL,:) = [];
+[~,ind] = sort(p(:,1));
+p = p(ind,:);
+idxs = idxs(ind,:);
+% p([3,4,7,9],:) = [];
+% idxs([3,4,7,9],:) = [];
+idxs_2006 = idxs;
+x_plot = TXD_pareto(idxs_2006);
+y_plot = t_pareto(idxs_2006);
+plot(y_plot(:),x_plot(:),'c-o','Markersize',8,'linewidth',1.8) 
+
+%%
+load('C:\PPGEE\Assessing CGST on ASSR\new_code\backup3_pareto_completo_betamsc_cgst.mat')
+%%
+
+
+t_pareto = t_decisao;
+t_pareto(t_pareto<0) = -1*t_pareto(t_pareto<0);
+t_pareto(t_pareto==0) = NaN;
+
+t_pareto = mean_reduce(mean_reduce(t_pareto,6),2);
+TXD_pareto = sum_reduce(sum_reduce(TP,6),2);
+TXD_pareto = 100*TXD_pareto./(numel(vec_volunt)*numel(signal_freq_bins));
+
+TXD_pareto = TXD_pareto(2,:,:,:);
+t_pareto = t_pareto(2,:,:,:);
+% 
+% TXD_pareto(isnan(TXD_pareto)) = [];
+% t_pareto(isnan(t_pareto)) = [];
+
+[ p, idxs] = paretoFront([TXD_pareto(:),(t_pareto(:))] ); 
+auxL = p(:,1)<0.05; 
+p(auxL,:) = [];
+idxs(auxL,:) = [];
+
+nan_rows = isnan(p(:,2));
+row_indices = find(nan_rows);
+p = p(~isnan(p(:,2)), :);
+
+[~,ind] = sort(p(:,1));
+p = p(ind,:);
+idxs = idxs(ind,:);
+
+x_plot = TXD_pareto(idxs);
+y_plot = t_pareto(idxs);
+
+% uiopen('C:\PPGEE\Assessing CGST on ASSR\Pareto Todos.fig',1)
+%uiopen('C:\PPGEE\Assessing CGST on ASSR\Pareto Todos_30.fig',1)
+uiopen('C:\PPGEE\Assessing CGST on ASSR\Pareto Todos_50.fig',1)
+%uiopen('C:\PPGEE\Assessing CGST on ASSR\Pareto Todos_70.fig',1)
+
+hold on
+plot(y_plot(:),x_plot(:),'c-o','Markersize',8,'linewidth',1.8) 
+
+
+
+
+a=gca;
+a.Legend.String = {'(Zonateli, 2020)',  '(Bazoni,2021)', '(Antunes, 2019)',...
+    '(Vaz, 2023)','Single Test','Beta-CGST'};
+a.Legend.AutoUpdate = 'off';
+
+scatter(t_pareto(:), TXD_pareto(:),8, 'filled','MarkerEdgeColor','cyan',...
+              'MarkerFaceColor','cyan')
+
+% ylim([0,480])
+% xlim([0,40])
+ylim([0,255])
+xlim([0,75])
+
+%%
+sum(TXF<5)/numel(TXF)
+sum(TXF<5, 'all')/numel(TXF)
+whos TXF
+TXF2 = sum_reduce(sum_reduce(FP,6),2);
+whos TXF2
+TXF2_50dB = TXF2(2,:,:,:);
+sum(TXF2_50dB<5, 'all')/numel(TXF2_50dB)
+TXF2_30dB = TXF2(3,:,:,:);
+sum(TXF2_30dB<5, 'all')/numel(TXF2_30dB)
+TXF2_70dB = TXF2(1,:,:,:);
+sum(TXF2_70dB<5, 'all')/numel(TXF2_70dB)
+
+%%
+% intensIv = []; tamMv = []; tamMstepv = []; numKv = [];
+[intensIv, tamMv, tamMstepv, numKv] = ind2sub(size(TXF2),find(TXF2>5));
+
+
+figure(1)
+subplot(2,2,1)
+histogram(intensIv,size(TXF2,1),'normalization','cdf')
+xlabel('30 50 70 dB')
+title('intensIv')
+
+subplot(2,2,2)
+histogram(tamMv,size(TXF2,2)+1,'normalization','cdf', 'BinEdges',1:numel(vec_M))
+xlabel('10    16    20    24    30')
+title('tamMv')
+
+subplot(2,2,3)
+histogram(tamMstepv, size(TXF2,3),'normalization','cdf')
+title('tamMstepv')
+
+subplot(2,2,4)
+histogram(numKv, size(TXF2,4),'normalization','cdf','BinEdges', vec_K)
+title('numKv')
+
+
+figure(2)
+subplot(2,2,1)
+histogram(intensIv,size(TXF2,1),'normalization','probability')
+xlabel('30 50 70 dB')
+title('intensIv')
+
+subplot(2,2,2)
+histogram(tamMv,size(TXF2,2),'normalization','probability', ...
+    'BinEdges',1:numel(vec_M))
+xlabel('10    16    20    24    30    40')
+title('tamMv')
+
+subplot(2,2,3)
+histogram(tamMstepv, size(TXF2,3),'normalization','probability')
+title('tamMstepv')
+
+subplot(2,2,4)
+histogram(numKv, size(TXF2,4),'normalization','probability', ...
+    'BinEdges', vec_K)
+title('numKv')
+
+=== End pareto_completo_betamsc_cgst.m ===
+
+
+=== Begin run_betamsc_cgst.m ===
+
+function [t_decisao,TP,FP,TN,FN] = run_betamsc_cgst(...
+    intens,...
+    volunt,...
+    M, ...
+    Mstep, ...
+    K, ...
+    Kmax, ...
+    signal_freq_bins, ...
+    noise_freq_bins,...
+    SIGNALS)
+%run_betamsc_cgst Summary of this function goes here
+%   Detailed explanation goes here
+%  [t_decisao,TP,FP,TN,FN] = run_betamsc_cgst(intens, volunt, M, %disj, K,freq_bins)
+% 
+%       temos: M, K, alpha, gamma, intensidade, voluntario
+%       calculamos: VCfutilidade, VCeficacia
+%
+%       aplicamos: 
+%   para cada k=1:K
+%     em MSC de recorte com janela de tamanho M = M + k*Mstep:
+%      tki = 1:Mstep:Mlimite-Mmin; ?
+%      tkf = Mmin:Mstep:Mlimite;   ?
+%     testamos se: 
+%         tem valor somado acumulado >= VCeficacia em signal_freq_bins   (TP)
+%             entao ntp = ntp+1
+%             e t_decisao = ?
+%         tem valor somado acumulado <= VCfutilidade em signal_freq_bins (FN)
+%             entao nfn = nfn+1
+%         tem valor somado acumulado >= VCeficacia em noise_freq_bins    (FP)
+%             entao nfp = nfp+1
+%         tem valor somado acumulado <= VCfutilidade em noise_freq_bins  (TN)
+%             entao ntn = ntn+1
+%   
+
+
+%% Inicializando variaveis
+% isso aqui ta ruim
+freq_bins = [signal_freq_bins, noise_freq_bins];
+flag_noise = numel(signal_freq_bins)+1;
+t_decisao = zeros(Kmax,numel(freq_bins));
+TP = zeros(Kmax,numel(freq_bins));
+FP = zeros(Kmax,numel(freq_bins));
+TN = zeros(Kmax,numel(freq_bins));
+FN = zeros(Kmax,numel(freq_bins));
+
+%% Calcula ou busca valores criticos
+
+% Refatorar para programacao dinamica
+[aThresholds, gThresholds] = vc_beta_cgst(M, K);
+
+%% Aplica testes
+
+exam = zeros(numel(freq_bins),K);
+
+if size(SIGNALS,2)>=M+K*Mstep
+for k=1:K
+
+    % Calcula indices dos recortes
+    ind_final = M+k*Mstep;
+    ind_inicial = ind_final-M+1;
+    recorte = SIGNALS(:,ind_inicial:ind_final);
+    Ps = msc_fft(recorte,M);
+
+    for idx_freq = 1:numel(freq_bins)
+    
+        exam(idx_freq,k) = Ps(freq_bins(idx_freq));
+    
+        % SIGNAL
+        if idx_freq < flag_noise && ...                         % not noise
+            sum(exam(idx_freq,1:k)) >= aThresholds(k)    % detected
+
+            TP(k,idx_freq) = TP(k,idx_freq)+1;
+            t_decisao(k,idx_freq) =~sum(t_decisao(:,idx_freq));
+    
+        elseif idx_freq < flag_noise && ...                     % not noise
+                sum(exam(idx_freq,1:k)) <= gThresholds(k)% gave up 
+
+            FN(k,idx_freq) = FN(k,idx_freq)+1;
+            t_decisao(k,idx_freq) =~sum(t_decisao(:,idx_freq));
+
+        % NOISE
+        elseif idx_freq >= flag_noise && ...                    % is noise
+                sum(exam(idx_freq,1:k)) >= aThresholds(k)       % detected
+
+            FP(k,idx_freq) = FP(k,idx_freq)+1;
+            t_decisao(k,idx_freq) =~sum(t_decisao(:,idx_freq));
+            
+        elseif idx_freq >= flag_noise && ...                    % is noise
+                sum(exam(idx_freq,1:k)) <= gThresholds(k)       % gave up
+
+            TN(k,idx_freq) = TN(k,idx_freq)+1;
+            t_decisao(k,idx_freq) = ~sum(t_decisao(:,idx_freq));
+            
+        end
+
+    end
+
+end
+end
+%% Diagnostico ou retorno
+
+
+
+end
+=== End run_betamsc_cgst.m ===
+
+
+=== Begin run_betamsc_cgst_RATE.m ===
+
+function [t_decisao,TP,FP,TN,FN] = run_betamsc_cgst_RATE(...
+    intens,...
+    volunt,...
+    M, ...
+    Mstep, ...
+    K, ...
+    Kmax, ...
+    signal_freq_bins, ...
+    noise_freq_bins,...
+    SIGNALS)
+%run_betamsc_cgst Summary of this function goes here
+%   Detailed explanation goes here
+%  [t_decisao,TP,FP,TN,FN] = run_betamsc_cgst(intens, volunt, M, %disj, K,freq_bins)
+% 
+%       temos: M, K, alpha, gamma, intensidade, voluntario
+%       calculamos: VCfutilidade, VCeficacia
+%
+%       aplicamos: 
+%   para cada k=1:K
+%     em MSC de recorte com janela de tamanho M = M + k*Mstep:
+%      tki = 1:Mstep:Mlimite-Mmin; ?
+%      tkf = Mmin:Mstep:Mlimite;   ?
+%     testamos se: 
+%         tem valor somado acumulado >= VCeficacia em signal_freq_bins   (TP)
+%             entao ntp = ntp+1
+%             e t_decisao = ?
+%         tem valor somado acumulado <= VCfutilidade em signal_freq_bins (FN)
+%             entao nfn = nfn+1
+%         tem valor somado acumulado >= VCeficacia em noise_freq_bins    (FP)
+%             entao nfp = nfp+1
+%         tem valor somado acumulado <= VCfutilidade em noise_freq_bins  (TN)
+%             entao ntn = ntn+1
+%   
+
+
+%% Inicializando variaveis
+% isso aqui ta ruim
+freq_bins = [signal_freq_bins, noise_freq_bins];
+flag_noise = numel(signal_freq_bins)+1;
+t_decisao = zeros(Kmax,numel(freq_bins));
+TP = zeros(Kmax,numel(freq_bins));
+FP = zeros(Kmax,numel(freq_bins));
+TN = zeros(Kmax,numel(freq_bins));
+FN = zeros(Kmax,numel(freq_bins));
+
+%% Calcula ou busca valores criticos
+
+% Refatorar para programacao dinamica
+[aThresholds, gThresholds] = vc_beta_cgst(M, K);
+
+%% Aplica testes
+
+exam = zeros(numel(freq_bins),K);
+
+if size(SIGNALS,2)>=M+K*Mstep
+    for k=1:K
+    
+        % Calcula indices dos recortes
+        ind_final = M+k*Mstep;
+        ind_inicial = ind_final-M+1;
+        recorte = SIGNALS(:,ind_inicial:ind_final);
+        Ps = msc_fft(recorte,M);
+    
+        for idx_freq = 1:numel(freq_bins)
+        
+            exam(idx_freq,k) = Ps(freq_bins(idx_freq));
+        
+            % SIGNAL
+            if idx_freq < flag_noise && ...                         % not noise
+                sum(exam(idx_freq,1:k)) >= aThresholds(k)    % detected
+    
+                TP(k,idx_freq) = TP(k,idx_freq)+1;
+                t_decisao(k,idx_freq) = ~sum(t_decisao(:,idx_freq),'all');
+        
+            elseif idx_freq < flag_noise && ...                     % not noise
+                    sum(exam(idx_freq,1:k)) <= gThresholds(k)% gave up 
+    
+                FN(k,idx_freq) = FN(k,idx_freq)+1;
+                t_decisao(k,idx_freq) = -1*(~sum(t_decisao(:,idx_freq),'all'));
+    
+            % NOISE
+            elseif idx_freq >= flag_noise && ...                    % is noise
+                    sum(exam(idx_freq,1:k)) >= aThresholds(k)       % detected
+    
+                FP(k,idx_freq) = FP(k,idx_freq)+1;
+                t_decisao(k,idx_freq) = ~sum(t_decisao(:,idx_freq),'all');
+                
+            elseif idx_freq >= flag_noise && ...                    % is noise
+                    sum(exam(idx_freq,1:k)) <= gThresholds(k)       % gave up
+    
+                TN(k,idx_freq) = TN(k,idx_freq)+1;
+                t_decisao(k,idx_freq) = -1*(~sum(t_decisao(:,idx_freq),'all'));
+                
+            end
+    
+        end
+    
+    end
+end
+%% Diagnostico ou retorno
+% separa deteccoes
+detect = t_decisao;
+detect(detect<0) = 0;
+
+% detectou e era sinal
+TPr = sum_reduce(detect(:,1:flag_noise-1),2)/(flag_noise-1); 
+% detectou mas era ruido
+FPr = sum_reduce(detect(:,flag_noise:end),2)/numel(noise_freq_bins); 
+
+% separa rejeicoes
+reject = t_decisao;
+reject(reject<0) = 0;
+
+% rejeitou mas era sinal
+FNr = sum_reduce(reject(:,1:flag_noise-1),2)/(flag_noise-1); 
+
+% rejeitou e era ruido
+TNr = sum_reduce(reject(:,flag_noise:end),2)/numel(noise_freq_bins); 
+
+% substitui o evento de detecao pelo tempo em que ocorreu deteccao
+aux = 1:Kmax;
+for freq=1:numel(freq_bins)
+    t_decisao(:,freq) = t_decisao(:,freq).*aux';
+end
+
+num_segs_por_teste = (M+K*Mstep)/K;
+t_decisao= t_decisao.*num_segs_por_teste;
+end
+=== End run_betamsc_cgst_RATE.m ===
+
+
+=== Begin sum_reduce.m ===
+
+function red = sum_reduce(vec,dim)
+    red = squeeze(sum(vec,dim));
+end
+=== End sum_reduce.m ===
+
+
+=== Begin terrible_load.m ===
+
+function SIGNALS = terrible_load(intens,volunt)
+%UNTITLED6 Summary of this function goes here
+%   Detailed explanation goes here
+
+cont_int = intens;
+cont_vol = volunt;
+
+% SET THIS PATH:
+path = 'C:\PPGEE\SBEB_CBA_24\ASSR - Coleta OFFLINE';
+addpath(path)
+%vetor dos voluntários 
+Vvoluntario = {'Abdon';'Ana';'BBB';'Colatina';'Erick';'Luciana';...
+    'Sombra';'Quenaz';'Vinicius';'Sacola';'Wreikson'}; 
+
+%vetor da intensidade 
+Vintensidade = {'70';'60';'50';'40';'30'}; 
+load('eletrodos.mat')
+ganho  = 200;
+remoc = 0.1/ganho; 
+
+voluntario = cell2mat(Vvoluntario(cont_vol,:));
+
+if cont_int==6
+     load([voluntario 'ESP'], 'x','Fs','binsM','freqEstim') 
+else
+    intensidade = cell2mat(Vintensidade(cont_int,:));
+    load([voluntario '_'  intensidade 'dB'], 'x','Fs','binsM','freqEstim') 
+end
+
+nfft = Fs;%1segundo de sinal 
+ 
+%retirar componente DC por janela (fiz isso pq no processamento em
+%tempo real é por janela)
+x = x - repmat(mean(x),nfft,1); %tirar a média de cada de cada trecho - devido a remoção
+
+% excluir os dois primeiros segundos do inicio da coleta 
+x(:,1:2,:) =[]; 
+
+% %encontrar o valor máximo por canal 
+Vmax = squeeze(max(max(abs(x)),[],3));
+ind = Vmax>remoc;
+% xmedia = squeeze(mean(x(:,~ind,:),2));
+
+pos_eletrodo= 1;
+xmedia = x(:,~ind,pos_eletrodo);
+
+SIGNALS = fft(xmedia,Fs);%*2/nfft*1e9;
+FS = Fs;
+NFFT = Fs;
+SIGNALS = SIGNALS(1:floor(end/2)+1,:); % only half the FFT spectrum is valid
+
+end
+=== End terrible_load.m ===
+
+
+=== Begin testando_transfnabeta_abstractedCGSTMSC.m ===
+
+%% 
+clear all
+close all
+clc
+
+% parameters
+K               = 5;                            % analyse data 3 times
+M = 40;
+TotalAlpha      = 0.5;                         % pre-specified alpha-level for the full sequential test
+Alpha_k         = ones(1,K)*(TotalAlpha/K);     % alpha to spend at each stage
+% Gamma_k         = [0.1, 0.15, 0.2, 0.25, 0.29]; % ...!
+Gamma_k = ((1-TotalAlpha)/K).*ones(1,K);
+Resolution      = (1/0.0001);                   % the resolution of the approximated distribution of the test statistic
+Xvalues         = 0:1/Resolution:50;            % the x-axis along which the distribution of the test statistic will be defined
+Null         	= -2*log(betapdf(Xvalues, 1, M-1)); %chi2pdf(Xvalues,2);           % null distribution for test statistic at stage k
+Null            = Null/sum(Null);             	% normalise 
+Chi2_Norm       = Null/sum(Null);             	% normalise 
+
+% stage 1 threshold
+k               = 1;                            % stage 1
+gThresholds(k)	= -2*log(1 - Alpha_k(k).^(1./(M-1)));   % for the first stage, we don't need to do any convolutions
+% aThresholds(k)	= -2*log( Alpha_k(k) );
+% 1 - alpha.^(1./(M-1))
+aThresholds(k)	= -2*log(1-(1- Gamma_k(k)).^(1./(M-1)));
+TruncInd_Ra      = round(aThresholds(k)*Resolution);                                          % The location where the stage 1 distribution will be truncated (later at stage two)
+TruncInd_Rg      = round(gThresholds(k)*Resolution);           
+
+for k = 2:K
+    disp(k)
+    NullTrunc                   = Null;                                                     % reset null hip.
+    NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));              % truncate distribution: this is the stage k-1 distribution upon entering stage k
+    NullTrunc(1:TruncInd_Rg)    = zeros(1, length(NullTrunc(1:TruncInd_Rg)));
+    
+    Null2                       = conv(Chi2_Norm, NullTrunc);                               % convolve the truncated distribution with the stage two distribution (given by Chi2_Norm) to give the distibution of the summary statistic for stage k
+    Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
+    % Null2                       = Null2 / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1))));   % normalise. Note: area is reduced due to the truncation
+    
+    TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k));            % find the critical threshold. Function "findIndex" is a search function (probably not the most efficient, but it works)
+    aThresholds(k)              = TruncInd_Ra/Resolution;                                    % translate the index to a threshold
+    TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
+    gThresholds(k)              = TruncInd_Rg/Resolution;
+    Null                        = Null2; 
+end
+disp('')
+disp('--------------------------------')
+disp(aThresholds)
+disp(gThresholds)
+% Thresholds =[aThresholds;gThresholds]
+% Thresholds = aThresholds;
+%%
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+% % % % % % % % % % % verify FPR  % % % % % % % % % % % % % % % % % % % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+% K       = 5;                % test the 5-staged design
+FP      = zeros(1, K);      % number of false-positives
+TN      = zeros(1, K);      % number of true-negatives
+NumT    = 1*1e6;          % number of tests to carry out
+
+for ti=1:NumT
+    Ps          = betarnd(1,M-1,1,K);            % random p values: all assumptions are met, so the FPR should be exact. 
+    Plog        = Ps;           % fisher transform
+    Detected    = false;                % 
+    
+    % check for rejections
+    for k=1:K
+        if sum(Plog(1:k)) >= aThresholds(k)
+            FP(k) = FP(k)+1;
+            break
+        elseif sum(Plog(1:k)) <= gThresholds(k)
+            TN(k) = TN(k)+1;
+            break
+        end
+    end
+end
+
+Stage_FPRs  = FP/NumT               % stage-wise FPRs
+FPR         = sum(FP) / NumT        % total FPR
+
+Stage_TNRs  = TN/NumT               % stage-wise FPRs
+TNR         = sum(TN) / NumT        % total FPR
+=== End testando_transfnabeta_abstractedCGSTMSC.m ===
+
+
+=== Begin vc_beta_cgst.m ===
+
+function [aThresholds, gThresholds] = vc_beta_cgst(M, K)
+%UNTITLED5 Summary of this function goes here
+%   Detailed explanation goes here
+
+TotalAlpha      = 0.05;                        
+Alpha_k         = ones(1,K)*(TotalAlpha/K);     
+Gamma_k         = ((1-TotalAlpha)/K).*ones(1,K);
+
+Resolution      = (1/0.0001);                  
+Xvalues         = 0:1/Resolution:3;            
+Null         	= betapdf(Xvalues, 1, M-1); %normpdf(Xvalues,muk1,sigmak1);% normpdf(Xvalues,0,0.05); %normpdf(Xvalues,0.05,0.3); %betapdf(Xvalues, 1, M-1); 
+Null            = Null/sum(Null);             	
+Beta_Norm       = Null/sum(Null);             	
+k               = 1;                            
+aThresholds(k)	= 1 - Alpha_k(k).^(1./(M-1));  % quantile(betarandn(1,1e5), 1-Alpha_k(1)); %
+gThresholds(k)	= 1-(1- Gamma_k(k)).^(1./(M-1)); % quantile(randn(1,1e5), Gamma_k(1));
+TruncInd_Ra     = round(aThresholds(k)*Resolution);                                         
+TruncInd_Rg     = round(gThresholds(k)*Resolution);           
+
+for k = 2:K
+    % disp(k)
+    NullTrunc                   = Null;                                                     
+    NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));              
+    NullTrunc(1:TruncInd_Rg)    = zeros(1, length(NullTrunc(1:TruncInd_Rg)));
+    Null2                       = conv(Beta_Norm, NullTrunc);                              
+    Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
+    TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k));            
+    aThresholds(k)              = TruncInd_Ra/Resolution;                                    
+    TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
+    gThresholds(k)              = TruncInd_Rg/Resolution;
+    Null                        = Null2;
+end
+
+end
+=== End vc_beta_cgst.m ===
+
+=== Begin sinal_eeg.m ===
+%Aplicação do protocolo ao banco de dados 
+clear all, close all, clc 
+
+caminho = 'C:\Users\Crohma\Documents\PNV\Simulation\Testes_Seq\Sinais_EEG\';
+
+%vetor dos voluntários 
+Vvoluntario = {'Ab';'An';'Bb';'Er';'Lu';...
+    'So';'Qu';'Vi';'Sa';'Ti';'Wr'}; %vetor dos voluntário 
+
+% Vvoluntario = Vvoluntario([1,2]);
+
+%Intensidade ----------------------
+%intensidade = {'70dB';'60dB';'50dB';'40dB';'30dB';'ESP'}; %quais intensidade analisadas 
+%sugestão
+%vetor_Mmax = [50;50;240;440;440;20]; %número máximo de janela para cada intensidade
+Intensidade = {'ESP'};
+% Intensidade = {'ESP'};
+% Intensidade = {'60dB'};
+
+Mmax = 20; %valor máximo 
+
+%% Parametros do protocolo de detecção. 
+
+%parametros = [Min Mstep Mmax alfa_corrigido]
+%parametros = [200 1 200 .05];
+% nRuns  = 10000;
+% Mmax = 240; %número máximo de janela 
+% alfa_teste = 0.05;
+% FP_desejado =0.05;
+% [alfa_corrigido,NDC_minimo,cost_alfa, P] = funcao_NDC_alfaCorrigido_Mmax(nRuns,Mmax ,alfa_teste,FP_desejado);
+alfa = 0.05;
+FP_desejado = 0.05; 
+
+
+load(['NDC_AlfaCorrigido_Mmax' num2str(Mmax) '_alfa_'  num2str(alfa) '_FPdesejado' num2str(FP_desejado) '.mat'],'alfa_corrigido', ...
+    'NDC_minimo','P', 'nRuns')
+
+parametros = [P, NDC_minimo,alfa_corrigido];
+% parametros(:,5) = 0.05;
+
+
+%%
+load([caminho 'eletrodos.mat'])
+pos_ele = 1; 
+
+ganho  = 200;
+alpha = 0.05; 
+
+%% --------------------------------------------------
+remoc = [.1]/ganho; 
+
+
+%% 
+%******poder fazer por intensidade aqui -------
+
+for cont_vol = 1:size(Vvoluntario,1) %fazer por voluntário 
+    
+    voluntario = cell2mat(Vvoluntario(cont_vol,:)); %carregar o voluntário 
+    intensidade = cell2mat(Intensidade); %intensidadde 
+    load([caminho voluntario intensidade], 'x','Fs','binsM','freqEstim')   
+  
+    x = x(:,:,pos_ele);
+    
+     nfft = Fs;%1segundo de sinal 
+         
+     %retirar componente DC por janela (fiz isso pq no processamento em
+     %tempo real é por janela)
+     x = x - repmat(mean(x),nfft,1); %tirar a média de cada de cada trecho - devido a remoção
+        
+     %scluir os dois primeiros segundos do inicio da coleta 
+     x(:,1:2,:) =[]; 
+        
+        
+     %encontrar o valor máximo por canal 
+      Vmax = max(abs(x),[],1);
+      ind = Vmax>remoc;
+      [sum(ind) cont_vol ];
+      x = x(:,~ind); %removor o ruído amplitude 
+      x = x(:,1:Mmax);%limitar o tamanho para o valor máximo. 
+     
+      %******** fazer por canal diferente ----for nCanal = 1:16 %
+      [dr,time] = protocolo_deteccao(x, parametros);
+      
+      Tdr(:,:,cont_vol) = dr;
+      Ttime(:,:,cont_vol) = time;
+            
+end
+
+%% Análise de desempenho 
+
+%TXD - analisar as freq. estimulação 
+%binsM = [82    84    86    88    90    92    94    96]
+%freq. 81Hz,83,85,87,89,91,93,95Hz
+TXD = mean(mean(Tdr(binsM,:,:),3),1)';
+
+binsR = binsM+1;
+binsR = 1:100; 
+binsR(binsM) = []; 
+binsR(1:2) = []; 
+
+FP = mean(mean(Tdr(binsR,:,:),3),1)';
+
+
+%% mostrar resultados 
+%clc
+%1 - Taxa de detecção 
+figure 
+plot(TXD,'.k','MarkerSize',10)
+hold on 
+plot([0 size(TXD,1)],[TXD(end) TXD(end)], ':r','LineWidth',2)
+ylabel('Taxa de Detecção','fontsize',12)
+
+%2 - Falsos Positivo  
+figure 
+plot(FP,'.k','MarkerSize',10)
+hold on 
+plot([0 size(FP,1)],[FP_desejado FP_desejado], ':r','LineWidth',2)
+ylabel('Falso Positivo','fontsize',12)
+
+figure
+boxplot(FP)
+
+%%
+% taxa de detecção x tempo 
+timeM = time(binsM,:); 
+timeM(timeM==-1) = Mmax;
+timeM = mean(timeM,1)'*1; %1segundo por janela
+TXD = mean(mean(Tdr(binsM,:,:),3),1)' *100;
+
+
+figure1 = figure; axes1 = axes('Parent',figure1); hold(axes1,'on');  
+plot([0 1]*100, [Mmax Mmax],'-.k','linewidth',1) 
+plot([TXD(end) TXD(end)], [min(timeM) max(timeM)],'-.k','linewidth',1) 
+
+
+for ii = 1:size(parametros,1)
+    plot(TXD(ii),timeM(ii),'.k','Markersize',6,'DisplayName',[num2str(parametros(ii,1)) '-' num2str(parametros(ii,2))])
+end
+
+[ p, idxs] = paretoFront([TXD,(-timeM)] ); 
+auxL = p(:,1)<0.5; 
+p(auxL,:) = [];
+idxs(auxL,:) = [];
+
+[~,ind] = sort(p(:,1));
+p = p(ind,:);
+idxs = idxs(ind,:);
+% p([3,4,7,9],:) = [];
+% idxs([3,4,7,9],:) = [];
+
+plot(TXD(idxs),timeM(idxs),'-or','Markersize',8,'linewidth',1.2) 
+
+% ylim([min(-p(:,2))*.9 max(-p(:,2))*1.1])
+% xlim([min(p(:,1))*80 max(p(:,1))*104])
+
+set(axes1,'XMinorTick','on');
+set(axes1,'YMinorTick','on');
+box(axes1,'off');
+hold off
+xlabel('Detection Rate (%)','fontsize',12); 
+ylabel('Mean Exam Time (min)','fontsize',12);
+fprintf('\n'); 
+
+for ii = 1:size(idxs,1)
+
+    [I] = find((TXD == TXD(idxs(ii))) & (timeM==timeM(idxs(ii))));
+    
+    fprintf('\nPD = %f Tempo = %f ',TXD(idxs(ii)),timeM(idxs(ii))); 
+    fprintf(' NI = %d ',length(I)); 
+     I = I(1); 
+    
+    for jj = I  
+        
+        fprintf(' - Buffer:%d, M_step:%d', parametros(jj,1),parametros(jj,2)); 
+    %    text(PD_T(jj)*99,T_exame_G(idxs(ii))*.985,['\{' num2str(parametros(jj,1)) ',' num2str(parametros(jj,2)) ','  num2str(parametros(jj,3)) '\}' ]);
+%            text(PD_T(jj)*99,T_exame_G(idxs(ii))*.985,['\{' num2str(parametros(jj,1)) ',' num2str(parametros(jj,2)) ',100,'  num2str(parametros(jj,3)) '\}' ]);
+%        text(PD_T(jj)*99,T_exame_G(idxs(ii))*.985,['\{' num2str(parametros(jj,1)) ',' num2str(parametros(jj,2)) ',100\}' ]);
+       text(TXD(jj),timeM(idxs(ii))*.975,['\{' num2str(parametros(jj,1)) ',' num2str(parametros(jj,2)) '\}' ]);
+    end    
+end
+fprintf('\n'); 
+xlim([min(TXD(idxs))*.95,max(TXD(idxs))*1.05])
+ylim([min(timeM(idxs))*.95 Mmax*1.05])
+
+
+=== End sinal_eeg.m ===
+
+=== Begin sinal_eeg_M4.m ===
+%Aplicação do protocolo ao banco de dados 
+clear all, close all, clc 
+
+caminho = 'C:\Users\Crohma\Documents\PNV\Simulation\Testes_Seq\Sinais_EEG\';
+
+%vetor dos voluntários 
+Vvoluntario = {'Ab';'An';'Bb';'Er';'Lu';...
+    'So';'Qu';'Vi';'Sa';'Ti';'Wr'}; %vetor dos voluntário 
+
+% Vvoluntario = Vvoluntario([1,2]);
+
+%Intensidade ----------------------
+%intensidade = {'70dB';'60dB';'50dB';'40dB';'30dB';'ESP'}; %quais intensidade analisadas 
+%sugestão
+%vetor_Mmax = [50;50;240;440;440;20]; %número máximo de janela para cada intensidade
+% Intensidade = {'ESP'};
+% Intensidade = {'30dB'};
+Intensidade = {'50dB'};
+
+Mmax = 240; %valor máximo 
+
+%% Parametros do protocolo de detecção. 
+
+%parametros = [Min Mstep Mmax alfa_corrigido]
+%parametros = [200 1 200 .05];
+% nRuns  = 10000;
+% Mmax = 240; %número máximo de janela 
+% alfa_teste = 0.05;
+% FP_desejado =0.05;
+% [alfa_corrigido,NDC_minimo,cost_alfa, P] = funcao_NDC_alfaCorrigido_Mmax(nRuns,Mmax ,alfa_teste,FP_desejado);
+alfa = 0.05;
+FP_desejado = 0.05; 
+%% Dados 440 e 20 janelas
+% 
+% load(['NDC_Unitario_Mmax_' num2str(Mmax) '_alfa_'  num2str(alfa) '_FPdesejado' num2str(FP_desejado) '.mat'],'alfa_corrigido', ...
+%     'P', 'nRuns')
+% NDC_minimo = ones (size(alfa_corrigido));
+% parametros = [P, NDC_minimo,alfa_corrigido];
+% 
+% % % parametros(:,5) = 0.05;
+
+%% Dados 240 janelas
+% Dados salvos pelo H, uma matrix (1342x5)
+% (Mmin Mstep Mmax NDC=1 Alfa_corrigido)
+load(['NDC_Unitario_MSC_Mmax' num2str(Mmax) '.mat'],'parametros')  
+
+%load(['VC_Unitario_Mmax_' num2str(Mmax) '_alfa_'  num2str(alfa) '.mat'],'VC_not')
+load(['VC_not_Unitario_Mmax_' num2str(Mmax) '_alfa_'  num2str(alfa) '.mat'],'VC_not') 
+
+%%
+load([caminho 'eletrodos.mat'])
+pos_ele = 1; 
+
+ganho  = 200;
+alpha = 0.05; 
+
+%% --------------------------------------------------
+remoc = [.1]/ganho; 
+
+
+%% 
+%******poder fazer por intensidade aqui -------
+
+for cont_vol = 1:size(Vvoluntario,1) %fazer por voluntário 
+    
+    voluntario = cell2mat(Vvoluntario(cont_vol,:)); %carregar o voluntário 
+    intensidade = cell2mat(Intensidade); %intensidadde 
+    load([caminho voluntario intensidade], 'x','Fs','binsM','freqEstim')   
+  
+    x = x(:,:,pos_ele);
+    
+     nfft = Fs;%1segundo de sinal 
+         
+     %retirar componente DC por janela (fiz isso pq no processamento em
+     %tempo real é por janela)
+     x = x - repmat(mean(x),nfft,1); %tirar a média de cada de cada trecho - devido a remoção
+        
+     %scluir os dois primeiros segundos do inicio da coleta 
+     x(:,1:2,:) =[]; 
+        
+        
+     %encontrar o valor máximo por canal 
+      Vmax = max(abs(x),[],1);
+      ind = Vmax>remoc;
+      [sum(ind) cont_vol ];
+      x = x(:,~ind); %removor o ruído amplitude 
+      x = x(:,1:Mmax);%limitar o tamanho para o valor máximo. 
+     
+      %******** fazer por canal diferente ----for nCanal = 1:16 %
+      [dr,time] = protocolo_deteccao(x, parametros, VC_not);
+      
+      Tdr(:,:,cont_vol) = dr;
+      Ttime(:,:,cont_vol) = time;
+            
+end
+
+%% Análise de desempenho 
+
+%TXD - analisar as freq. estimulação 
+%binsM = [82    84    86    88    90    92    94    96]
+%freq. 81Hz,83,85,87,89,91,93,95Hz
+TXD = mean(mean(Tdr(binsM,:,:),3),1)';
+
+% binsR = binsM+1;
+% binsR = 1:100; 
+% binsR(binsM) = []; 
+% binsR(1:2) = []; 
+
+binsR = 70:104;
+binsR(binsM - 71) = [];
+
+FP = mean(mean(Tdr(binsR,:,:),3),1)';
+%% FP sob EEG ESP
+% binsR= binsM;
+% 
+% FP = mean(mean(Tdr(binsR,:,:),3),1)';
+
+%% mostrar resultados 
+%clc
+%1 - Taxa de detecção 
+figure 
+plot(TXD*100,'.k','MarkerSize',10)
+% hold on 
+% plot([0 size(TXD,1)],[TXD(end) TXD(end)], ':r','LineWidth',2)
+% ylabel('Taxa de Detecção','fontsize',12)
+xlabel('Índice dos conjuntos de Parâmetros','fontsize',12)
+ylabel('Taxa de Detecção (%)','fontsize',12)
+% title(' ESP: Método 04','Fontsize',10)
+%Intensidade = {'50dB'};
+% title([ (Intensidade{1}), 'ONTÂNEO: Método 04'])
+title(['Estímulo ', (Intensidade{1}), ' SPL: Método 04'])
+
+% box off
+grid on
+%% 2 - Falsos Positivo  
+figure 
+plot(FP*100,'.k','MarkerSize',10)
+hold on 
+% lsup = 7.07;
+% linf = 3.03;
+% lsup = 7.41; 95%
+% linf = 3.03; 95%
+lsup = 6.73;
+linf = 3.37;
+
+
+plot([0 size(FP,1)],[lsup lsup], ':r','LineWidth',2) %Limite do SUP nivel de significancia
+% plot([0 size(FP,1)],[FP_desejado FP_desejado], ':r','LineWidth',2) %Limite do nivel de significancia
+plot([0 size(FP,1)],[linf linf], ':r','LineWidth',2) %Limite do INF nivel de significancia
+
+%ylabel('Falso Positivo','fontsize',12)
+xlabel('Índice dos conjuntos de Parâmetros','fontsize',12)
+ylabel('Taxa de Falso Positivo (%)','fontsize',12)
+box off
+title([(Intensidade{1}), 'ONTÂNEO: Método 04'])
+% title(['Estímulo ', (Intensidade{1}), ' SPL: Método 04'])
+ylim([0  9.1])
+%figure
+% boxplot(FP)Fa
+grid on
+
+
+%%
+% taxa de detecção x tempo 
+timeM = time(binsM,:); 
+timeM(timeM==-1) = Mmax;
+timeM = mean(timeM,1)'*1; %1segundo por janela
+TXD = mean(mean(Tdr(binsM,:,:),3),1)' *100;
+
+
+figure1 = figure; axes1 = axes('Parent',figure1); hold(axes1,'on');  
+plot([0 1]*100, [Mmax Mmax],'-.k','linewidth',1) 
+plot([TXD(end) TXD(end)], [min(timeM) max(timeM)],'-.k','linewidth',1) 
+
+
+for ii = 1:size(parametros,1)
+    plot(TXD(ii),timeM(ii),'.k','Markersize',6,'DisplayName',[num2str(parametros(ii,1)) '-' num2str(parametros(ii,2))])
+end
+
+[ p, idxs] = paretoFront([TXD,(-timeM)] ); 
+auxL = p(:,1)<0.5; 
+p(auxL,:) = [];
+idxs(auxL,:) = [];
+
+[~,ind] = sort(p(:,1));
+p = p(ind,:);
+idxs = idxs(ind,:);
+% p([3,4,7,9],:) = [];
+% idxs([3,4,7,9],:) = [];
+
+plot(TXD(idxs),timeM(idxs),'-or','Markersize',8,'linewidth',1.2) 
+
+% ylim([min(-p(:,2))*.9 max(-p(:,2))*1.1])
+% xlim([min(p(:,1))*80 max(p(:,1))*104])
+
+set(axes1,'XMinorTick','on');
+set(axes1,'YMinorTick','on');
+box(axes1,'off');
+
+
+hold off
+xlabel('Taxa de Detecção (%)','fontsize',12); 
+ylabel('Tempo Médio de Exame (s)','fontsize',12);
+% title(['Estímulo ', (Intensidade{1}), ': Método 04'])
+title(['Estímulo ', (Intensidade{1}), ' SPL: Método 04'])
+
+for ii = 1:size(idxs,1)
+
+    [I] = find((TXD == TXD(idxs(ii))) & (timeM==timeM(idxs(ii))));
+    
+    fprintf('\nPD = %f Tempo = %f ',TXD(idxs(ii)),timeM(idxs(ii))); 
+    fprintf(' NI = %d ',length(I)); 
+     I = I(1); 
+    
+    for jj = I  
+        
+        fprintf(' - Buffer:%d, M_step:%d', parametros(jj,1),parametros(jj,2)); 
+    %    text(PD_T(jj)*99,T_exame_G(idxs(ii))*.985,['\{' num2str(parametros(jj,1)) ',' num2str(parametros(jj,2)) ','  num2str(parametros(jj,3)) '\}' ]);
+%            text(PD_T(jj)*99,T_exame_G(idxs(ii))*.985,['\{' num2str(parametros(jj,1)) ',' num2str(parametros(jj,2)) ',100,'  num2str(parametros(jj,3)) '\}' ]);
+%        text(PD_T(jj)*99,T_exame_G(idxs(ii))*.985,['\{' num2str(parametros(jj,1)) ',' num2str(parametros(jj,2)) ',100\}' ]);
+       text(TXD(jj),timeM(idxs(ii))*.975,['\{' num2str(parametros(jj,1)) ',' num2str(parametros(jj,2)) '\}' ]);
+    end    
+end
+fprintf('\n'); 
+xlim([min(TXD(idxs))*.95,max(TXD(idxs))*1.05])
+ylim([min(timeM(idxs))*.95 Mmax*1.05])
+
+grid on
+% save(['timeM_30db_M4' '.mat'],'timeM')
+% save(['pareto_30db_M4' '.mat'],'TXD','Mmax','parametros');
+
+%% 30db
+% TXD=auxpd30db(:,1);
+% timeM=auxtime30db(:,1);
+% save(['timeM_30db_M4''.mat'],'timeM')
+% save(['pareto_font_M4''.mat'],'auxpd30db','auxtime30db','Mmax','parametros')
+%% 50db
+% TXD=auxpd50db(:,1);
+% timeM=auxtime50db(:,1);
+% save(['timeM_50db_M4''.mat'],'timeM')
+% save(['pareto_50db_M4''.mat'],'auxpd50db','auxtime50db','Mmax','parametros')
+
+%% 
+save(['Workspace_M4' '.mat']);
+
+=== End sinal_eeg_M4.m ===

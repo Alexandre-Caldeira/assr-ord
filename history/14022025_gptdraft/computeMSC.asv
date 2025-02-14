@@ -1,0 +1,15 @@
+function MSCvalues = computeMSC(fftSignals, K) 
+% computeMSC calculates a simplified magnitude-squared coherence (MSC) value per stage. 
+    totalBins = size(fftSignals, 2); 
+    windowsPerStage = floor(totalBins / K); 
+    MSCvalues = zeros(1, K); 
+    
+    for k = 1:K 
+        idxStart = (k-1)*windowsPerStage + 1; 
+        idxEnd = idxStart + windowsPerStage - 1; 
+        % stageData = abs(fftSignals(:, idxStart:idxEnd)).^2; 
+        stageData = msc_fft(fftSignals(:, idxStart:idxEnd), windowsPerStage); 
+        
+        MSCvalues(k) = mean(stageData(:)); 
+    end 
+end
