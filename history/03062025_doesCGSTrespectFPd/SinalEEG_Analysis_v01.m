@@ -47,37 +47,64 @@ clearvars;
 % close all; 
 clc;
 
+%% Main Pipeline
+% dtl = DataLoader('exp');
+dtl = DataLoader('sim');
+
+dtl.noiseMean = 15;
+% dtl.channels = 3;
+% dtl.nChannels = 3;
+dtl = dtl.genSimulatedSignals();
+dtl.inPath = 'C:\PPGEE\SBEB_CBA_24\CGST_figuras\Sinais_EEG\';
+dtl.stimulus = 3;
+
+%% old stuff to be reworked:
 
 % Filter parameters for preprocessing
 params.filter.fcLower = 70;                  % Lower cutoff frequency (Hz)
-params.filter.fcUpper = params.Fs/2 - 1;     % Upper cutoff frequency (Hz)
+params.filter.fcUpper = dtl.fs/2 - 1;        % Upper cutoff frequency (Hz)
 params.filter.order   = 8;                   % Butterworth filter order
+params.Fs = dtl.fs;
 
 % Sequential test settings
 params.alpha = 0.05;           % Overall false-positive rate
 % params.Mmin = []; params.Mmax = [];
 params.K     = 7;              % Number of sequential stages
-params.M     = params.duration / params.K;  % Window length (seconds) per stage
+params.M     = dtl.duration / params.K;  % Window length (seconds) per stage
 
-path_to_params = 'C:\PPGEE\SBEB_CBA_24\CGST_figuras\Sinais_EEG\';
+path_to_params = dtl.inPath;
 addpath(path_to_params)
+
+addpath('C:\PPGEE\Assessing CGST on ASSR\clean_code\assr-ord\garbage_in\seq_test\Numero_Deteccoes_consecutiva_H_recebidodePatricia14022025\Numero_Deteccoes_consecutiva_H')
+
+Mmax= dtl.zanoteliSuggestedMMax(dtl.stimulus);
+
 load(['NDC_AlfaCorrigido_Mmax' num2str(Mmax) '_alfa_'  num2str(params.alpha) '_FPdesejado' num2str(params.alpha) '.mat'], ...
     'P')
 params.P     = P; % parametros = [Min Mstep Mmax alfa_corrigido]
+params.duration = dtl.duration;
+params.nChannels = dtl.nChannels;
+params.nBins = dtl.nBins;
+params.testFrequencies = [dtl.signalFrequencies, dtl.noiseFrequencies];
+params.flagNoise = numel(dtl.signalFrequencies);
 
-params.testFrequencies = [params.signalFrequencies, params.noiseFrequencies];
-params.flagNoise = numel(params.signalFrequencies);
+dtl.signals = preprocessSignal(dtl.signals, params);
+dtl = dtl.computeFFT();
 
-%% Main Pipeline
-% dtl = DataLoader('exp');
+fftSignals = dtl.SIGNALS;
 
-
-fftSignals = computeFFT(signals, params);
+% check if filter is working
+figure
+stem(abs(fftSignals(:,1,1)))
 
 % 3. Compute MSC (here a simplified average per stage)
 MSCvalues = computeMSC(fftSignals, params);
 
 % 4. Compute sequential test thresholds
+
+% findIndex is not found in the current folder or on the MATLAB path, but exists in:
+    % C:\PPGEE\Assessing CGST on ASSR\new_code
+addpath('C:\PPGEE\Assessing CGST on ASSR\new_code')
 [aThresholds, gThresholds] = computeBetaThresholds(params.K, params.M, params);
 params.aThresholds = aThresholds;
 params.gThresholds = gThresholds;
@@ -91,18 +118,18 @@ params.gThresholds = gThresholds;
 % when numel(noiseFrequencies) > numel(signalFrequencies)
 % but not otherwise
 % why?
-perf = performanceMetrics(decisions, params);
-
-% 7. Plot the results
-fignum=1;
-plotResults(aThresholds, gThresholds, stageMetrics, perf, params,fignum);
-
-% 8. Print summary metrics
-fprintf('(FPR,pct.): %.4f\n', perf.FPR);
-fprintf('(TPR,pct.): %.4f\n', perf.TPR);
-fprintf('(TNR,pct.): %.4f\n', perf.TNR);
-fprintf('(FNR,pct.): %.4f\n', perf.FNR);
-
-fprintf('(No decision...,pct.): %.4f\n', sum(decisions==0,'all')/numel(decisions));
-fprintf('(Stop: detected.,pct.): %.4f\n', sum(decisions==1,'all')/numel(decisions));
-fprintf('(Stop: futile.,pct.): %.4f\n', sum(decisions==-1,'all')/numel(decisions));
+% perf = performanceMetrics(decisions, params);
+% 
+% % 7. Plot the results
+% fignum=2;
+% plotResults(aThresholds, gThresholds, stageMetrics, perf, params,fignum);
+% 
+% % 8. Print summary metrics
+% fprintf('(FPR,pct.): %.4f\n', perf.FPR);
+% fprintf('(TPR,pct.): %.4f\n', perf.TPR);
+% fprintf('(TNR,pct.): %.4f\n', perf.TNR);
+% fprintf('(FNR,pct.): %.4f\n', perf.FNR);
+% 
+% fprintf('(No decision...,pct.): %.4f\n', sum(decisions==0,'all')/numel(decisions));
+% fprintf('(Stop: detected.,pct.): %.4f\n', sum(decisions==1,'all')/numel(decisions));
+% fprintf('(Stop: futile.,pct.): %.4f\n', sum(decisions==-1,'all')/numel(decisions));

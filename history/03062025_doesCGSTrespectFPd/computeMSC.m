@@ -5,15 +5,15 @@ function MSCvalues = computeMSC(fftSignals, params)
     windowsPerStage = floor(totalWindows / K); 
 
     % MSCvalues = zeros(1, K); 
-    MSCvalues = zeros(params.nChannels,K,params.nBins);
+    MSCvalues = zeros(params.nBins,K,params.nChannels);
 
     for k = 1:K 
         idxStart = (k-1)*windowsPerStage + 1; 
         idxEnd = idxStart + windowsPerStage - 1; 
         
         for channel = 1:params.nChannels
-            MSCvalues(channel,k,:) = msc_fft( ...
-                squeeze(fftSignals(channel, :, idxStart:idxEnd)), ...
+            MSCvalues(:,k,channel) = msc_fft( ...
+                squeeze(fftSignals(:, idxStart:idxEnd,channel)), ...
                 windowsPerStage);
 
         end

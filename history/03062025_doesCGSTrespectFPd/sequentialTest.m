@@ -32,16 +32,16 @@ function [decisions, stageMetrics] = sequentialTest(MSCvalues, params)
                 %     % disp(decisions(channel, k, freq))
                 % 
                 % else
-                    if stageMetrics(channel, k, freq) >= params.aThresholds(k)
+                    if stageMetrics(freq,k, channel) >= params.aThresholds(k)
                         % Enough evidence to detect signal
-                        decisions(channel, k:params.K, freq) = 1;
-                        decisions(channel, 1:k-1, freq) = NaN;
+                        decisions(freq, k:params.K, channel) = 1;
+                        decisions(freq, 1:k-1, channel) = NaN;
                         continue
 
-                    elseif stageMetrics(channel, k, freq) < params.gThresholds(k)
+                    elseif stageMetrics(freq, k, channel) < params.gThresholds(k)
                         % Enough evidence to stop trial (futile)
-                        decisions(channel, k:params.K, freq) = -1;
-                        decisions(channel, 1:k-1, freq) = NaN;
+                        decisions(freq, k:params.K, channel) = -1;
+                        decisions(freq, 1:k-1, channel) = NaN;
                         continue
 
                     elseif k==params.K 

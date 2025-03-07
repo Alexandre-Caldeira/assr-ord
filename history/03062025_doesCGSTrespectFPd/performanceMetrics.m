@@ -14,8 +14,8 @@ function perf = performanceMetrics(decisions, params)
     end
     is_noise = mask;
 
-    is_detection = decisions(:,:,params.testFrequencies) == 1;
-    is_futility = decisions(:,:,params.testFrequencies) == -1;
+    is_detection = decisions(params.testFrequencies,:,:) == 1;
+    is_futility = decisions(params.testFrequencies,:,:) == -1;
 
     % Vectorized operations for each condition
     mask_TP = ~is_noise & is_detection;

@@ -3,5 +3,5 @@ function procSignals = preprocessSignal(signals, params)
     procSignals = signals - mean(signals, 2); 
     [b, a] = butter(params.filter.order, ... 
         [params.filter.fcLower, params.filter.fcUpper] / (params.Fs/2)); 
-    procSignals = filtfilt(b, a, procSignals')'; 
+    procSignals = filtfilt(b, a, procSignals); 
 end
