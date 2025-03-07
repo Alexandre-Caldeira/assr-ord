@@ -9,14 +9,14 @@ classdef DataLoader
         signals % y (timeseries data, MC sim or exp aquisition)
         SIGNALS % frequency data
         signalFrequencies = [82    84    86    88    90    92    94    96];
-        noiseFrequencies = [400];
+        noiseFrequencies = [];
 
         mode    % simulation mode 'sim' or 'exp'
         inPath  = 'C:\PPGEE\SBEB_CBA_24\CGST_figuras\Sinais_EEG\' % where y comes from
         outPath % where Y is saved
         
         % Processing Parameters
-        duration = [60];  % exam duration [secs], per stimulus intensity
+        duration = [60];  % exam duration [secs], per zanoteliStimulusIndex intensity
         channels = 1:16;  % Index for EEG leads (channels) in data
         fs       = 1000;  % Sampling frequency (Hz)
         nfft              % Number of FFT points per epoch (1 sec window in NIASv1)
@@ -30,8 +30,8 @@ classdef DataLoader
         SNRfun
 
         % For ASSR EEG Data
-        subject = [1];
-        stimulus = [1];
+        zanoteliSubjectIndex = [1];
+        zanoteliStimulusIndex = [1];
 
         zanoteliSuggestedMMax = [50; 50; 240; 440; 440; 20];
         zanoteliIntensity = {'70dB'; '60dB'; '50dB';
@@ -74,9 +74,9 @@ classdef DataLoader
 
             elseif matches(obj.mode(1:3),"exp", IgnoreCase=true)
                 % Try to load exp data for validation
-                subject = cell2mat(obj.zanoteliSubjects(obj.subject(1),:)); %carregar o voluntário 
-                stimulus = cell2mat(obj.zanoteliIntensity(1)); %intensidadde 
-                obj = obj.loadEEGData(subject, stimulus);
+                zanoteliSubjectIndex = cell2mat(obj.zanoteliSubjects(obj.zanoteliSubjectIndex(1),:)); %carregar o voluntário 
+                zanoteliStimulusIndex = cell2mat(obj.zanoteliIntensity(1)); %intensidadde 
+                obj = obj.loadEEGData(zanoteliSubjectIndex, zanoteliStimulusIndex);
 
             else
                 % Throw error
@@ -85,7 +85,7 @@ classdef DataLoader
 
         end
 
-        function obj = loadEEGData(obj, subject, stimulus)
+        function obj = loadEEGData(obj, zanoteliSubjectIndex, zanoteliStimulusIndex)
             % Check if obj is properly constructed
             if isempty(obj.inPath) 
                 error('EEG data file path not specified.'); 
@@ -93,7 +93,7 @@ classdef DataLoader
 
             % Build filepath and load
             % data = load(filepath); 
-            data = load([obj.inPath subject stimulus], ...
+            data = load([obj.inPath zanoteliSubjectIndex zanoteliStimulusIndex], ...
                 'x','Fs','binsM','freqEstim');
             
             if isfield(data, 'x') 
@@ -167,7 +167,8 @@ classdef DataLoader
         function obj = computeFFT(obj) 
             % computeFFT computes the FFT along each window (row-wise) and 
             % returns only the positive frequencies. 
-
+            
+            obj.duration = size(obj.signals,2);
             obj.nChannels= numel(obj.channels);
             obj.SIGNALS = zeros(obj.nBins, obj.duration, obj.nChannels);
 
