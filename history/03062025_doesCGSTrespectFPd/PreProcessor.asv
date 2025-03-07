@@ -1,20 +1,23 @@
 classdef PreProcessor
     % TODO: add all filters from (Antunes et al., 2016?) for further use 
     properties
+        filterFcLower = 70;                  % Lower cutoff frequency (Hz)
+        filterFcUpper = 1000/2 - 1;          % Upper cutoff frequency (Hz)
+        filterOrder   = 8;                   % Butterworth filter order
+        fs = 1000;
+        
+
         zanoteliGain  = 200;
         zanoteliCut
-
-        filterFcLower;  % Lower cutoff frequency (Hz)
-        filterFcUpper;  % Upper cutoff frequency (Hz)
-        filterOrder;    % Butterworth filter order
-        fs = 1000;      
         
         processedSignals
         filteredSignals
     end
 
     methods
-        function obj = PreProcessor()
+        function obj = PreProcessor(dataloader)
+            obj.fs = dataloader.fs;
+            obj.filterFcUpper = obj.fs/2 - 1;
             obj.zanoteliCut = 0.1/obj.zanoteliGain; % for artifact removal
         end
 
@@ -52,36 +55,26 @@ classdef PreProcessor
                 obj.processedSignals(:,:,channel) = x(:,1:Mmax);
 
             end
-
-            % Remove DC offset
-            % obj.processedSignals = signal - mean(signal, 2);
-            % 
-            % [b, a] = butter(obj.filterOrder, ... 
-            %     [obj.filterFcLower, obj.filterFcUpper] / (obj.fs/2)); 
-            % obj.processedSignals = filtfilt(b, a, obj.processedSignals); 
-
         end
 
-        function obj = antunesFiltering(obj, dataloader)
+        function obj = antunesFiltering(obj)
             % antunesFiltering applies a Butterworth bandpass filter.
-
-            obj.fs = dataloader.fs;
-            obj.filterFcLower = 70;  
-            obj.filterFcUpper = obj.fs/2 - 1;       
-            obj.filterOrder   = 8;                  
-
             for channel = dataloader.channels
+                
                 
                 x = squeeze(obj.processedSignals(:,:,channel));
 
-                [b, a] = butter(obj.filterOrder, ...
-                    [obj.filterFcLower, obj.filterFcUpper] / (obj.fs/2)); 
-                
-                obj.filteredSignals(:,:,channel) = filtfilt(b, a, x')'; 
+                [b, a] = butter(params.filter.order, ... 
+                    [params.filter.fcLower, params.filter.fcUpper] / (params.Fs/2)); 
+                procSignals = filtfilt(b, a, procSignals); 
+
+                obj.filteredSignals(:,:,channel) = x;
 
             end
 
         end
+
+
 
     end
 end

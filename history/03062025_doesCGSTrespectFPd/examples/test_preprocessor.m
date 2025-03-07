@@ -6,7 +6,7 @@ clc;
 %% Test Pipeline
 dtl = DataLoader('exp');
 dtl = dtl.computeFFT();
-ppc = PreProcessor(dtl);
+ppc = PreProcessor();
 ppc = ppc.zanoteliPreProcessing(dtl);
 
 random_electrode = randi([1, max(numel(dtl.zanoteliLeads))],1,1);
