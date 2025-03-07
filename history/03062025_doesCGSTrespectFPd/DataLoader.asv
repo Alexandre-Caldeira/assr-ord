@@ -25,7 +25,7 @@ classdef DataLoader
         totalSamples
 
         % For MC Simulation        
-        noiseMean = -5
+        noiseMean = -10
         noiseStd = 1
         SNRfun
 
@@ -48,6 +48,7 @@ classdef DataLoader
         function obj = DataLoader(mode,varargin)
             obj.timer = tic;
             obj.id = [num2str(keyHash(keyHash(mode)+obj.timer))];
+            obj.out
             
             if nargin == 2
                 obj.inPath = varargin{1};
@@ -131,11 +132,11 @@ classdef DataLoader
             % genSimulatedSignals generates simulated EEG signals (noise + sinusoidal signal). 
             % Example test usage:
             % dtl = DataLoader('sim');
-            stem(abs(dtl.SIGNALS(:,1,1)))
-            hold on
-            stem(dtl.signalFrequencies+1,abs(dtl.SIGNALS(dtl.signalFrequencies+1,1,1)),...
-            'MarkerFaceColor','red',...
-            'MarkerEdgeColor','red')
+            % stem(abs(dtl.SIGNALS(:,1,1)))
+            % hold on
+            % stem(dtl.signalFrequencies,abs(dtl.SIGNALS(dtl.signalFrequencies,1,1)),...
+            % 'MarkerFaceColor','red',...
+            % 'MarkerEdgeColor','red')
 
             obj.nChannels = numel(obj.channels);
             obj.totalSamples = obj.fs * obj.duration * obj.nChannels; 
@@ -145,7 +146,7 @@ classdef DataLoader
             for i = 1:numel(obj.signalFrequencies)
                 fo = obj.signalFrequencies(i)-1; 
                 % fo subtracted by one, such that FFT bin for frequency 
-                % will match the frequency because MATLAB
+                % will match the frequency because MATLAB index starts at 1
 
                 obj.signals = obj.signals+sin(2*pi*fo*t);
             end

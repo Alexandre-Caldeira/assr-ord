@@ -19,7 +19,7 @@ classdef DataLoader
         duration = [60];  % exam duration [secs], per stimulus intensity
         channels = 1:16;  % Index for EEG leads (channels) in data
         fs       = 1000;  % Sampling frequency (Hz)
-        nfft              % Number of FFT points (1 sec window)
+        nfft              % Number of FFT points per epoch (1 sec window in NIASv1)
         nBins             % ???
         nChannels
         totalSamples
@@ -48,6 +48,7 @@ classdef DataLoader
         function obj = DataLoader(mode,varargin)
             obj.timer = tic;
             obj.id = [num2str(keyHash(keyHash(mode)+obj.timer))];
+            obj.outPath = [pwd,'\'];
             
             if nargin == 2
                 obj.inPath = varargin{1};
@@ -172,7 +173,7 @@ classdef DataLoader
 
             for channel = 1:obj.nChannels
                 for epoch = 1:obj.duration
-                    temp = fft(squeeze(obj.signals(:,epoch,channel)),obj.fs, 1); 
+                    temp = fft(squeeze(obj.signals(:,epoch,channel)),obj.nfft, 1); 
                     obj.SIGNALS(:,epoch,channel) = temp(1:obj.nBins); 
                 end
             end

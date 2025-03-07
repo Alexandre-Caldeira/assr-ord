@@ -28,7 +28,7 @@ This unified MATLAB application:
     > DataLoader with FFT functional for exp and sim! :)
 
 - v0.2: [] 
-    > Preprocessing functional for exp and sim
+    > Preprocessing functional for exp and sim, signal recompute added
 
 - v0.3: [] 
     > MSC calculator now accepts variable parameters
