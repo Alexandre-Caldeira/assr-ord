@@ -1,8 +1,8 @@
 %Aplicação do protocolo ao banco de dados 
 clear all, close all, clc 
 
-caminho = 'C:\Users\Crohma\Documents\PNV\Simulation\Testes_Seq\Sinais_EEG\';
-
+% caminho = 'C:\Users\Crohma\Documents\PNV\Simulation\Testes_Seq\Sinais_EEG\';
+caminho = 'C:\PPGEE\SBEB_CBA_24\CGST_figuras\Sinais_EEG\';
 %vetor dos voluntários 
 Vvoluntario = {'Ab';'An';'Bb';'Er';'Lu';...
     'So';'Qu';'Vi';'Sa';'Ti';'Wr'}; %vetor dos voluntário 

@@ -8,39 +8,7 @@
 % • Runs a multi-stage sequential test with early stopping 
 % • Evaluates performance metrics and visualizes the results 
 % % Developed based on modern software engineering practices. 
-% % Author: [Alexandre Gomes Caldeira] 
-% % Date: 
-% - v0.0: [14 02 2025 10:40] 
-%   Project created, exposing incompatibilities...
-%
-% - v0.1: [07 03 2025 10:45] 
-%   DataLoader with FFT functional for exp and sim! :)
-%
-% - v0.2: [] 
-%   Preprocessing functional for exp and sim
-%
-% - v0.3: [] 
-%   MSC calculator now accepts variable parameters
-%
-% - v0.4: [] 
-%   ORD calculator functional for exp and sim
-%
-% - v0.5: [] 
-%   SHT (single hyp. test [Decisions, Time]) functional for exp and sim 
-%
-% - v0.6: [] 
-%   add Metrics: [Pareto, ConfusionMatrix, Specificity, Repeatability]
-%
-% - v0.7: [] 
-%   GST (group sequential test) functional for exp and sim
-%
-% - v0.8: [] 
-%   GST metrics verified 
-%
-% - v0.9: []
-%
-% - v1: [] 
-%
+% % Author: [Alexandre Gomes Caldeira] % Date: [14 02 2025 10:40]
 
 %% Clear workspace and initialize parameters
 clearvars; 
@@ -63,29 +31,17 @@ params.filter.order   = 8;                   % Butterworth filter order
 
 % Simulation settings (used when mode=='simulation')
 % params.sim.NumTests    = 1e5;    % Number of Monte Carlo tests
-params.sim.signalSNR   = -15;       % Signal-to-noise ratio in dB
-params.duration = 120;             % seconds
-params.nChannels = 3;              % EEG leads (electrodes)
+params.sim.signalSNR   = -5;     % Signal-to-noise ratio in dB
+params.duration = 120; % seconds
+params.nChannels = 3;
 
 % Sequential test settings
-params.alpha = 0.05;           % Overall false-positive rate
+params.alpha = 0.10;           % Overall false-positive rate
 % params.Mmin = []; params.Mmax = [];
 params.K     = 7;              % Number of sequential stages
 params.M     = params.duration / params.K;  % Window length (seconds) per stage
-
-%intensidade = {'70dB';'60dB';'50dB';'40dB';'30dB';'ESP'}; %quais intensidade analisadas 
-%vetor_Mmax = [50;50;240;440;440;20]; % sugestao Colatina número máximo de janela para cada intensidade
-Intensidade = {'50dB'}; % Intensidade = {'ESP'}; % Intensidade = {'60dB'};
-Mmax = 240;  %valor máximo 
-path_to_params = 'C:\PPGEE\SBEB_CBA_24\CGST_figuras\Sinais_EEG\';
-addpath(path_to_params)
-load(['NDC_AlfaCorrigido_Mmax' num2str(Mmax) '_alfa_'  num2str(params.alpha) '_FPdesejado' num2str(params.alpha) '.mat'], ...
-    'P')
-params.P     = P; % parametros = [Min Mstep Mmax alfa_corrigido]
-
-% [82    84    86    88    90    92    94    96]
-params.signalFrequencies = [82    88    92    96]; 
-params.noiseFrequencies  = randi([300 500],1,numel(params.signalFrequencies)); %300:407;
+params.signalFrequencies = [82    84    86    88    90    92    94    96]; 
+params.noiseFrequencies  = 300:407;
 
 params.testFrequencies = [params.signalFrequencies, params.noiseFrequencies];
 params.flagNoise = numel(params.signalFrequencies);

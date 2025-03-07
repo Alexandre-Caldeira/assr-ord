@@ -25,11 +25,11 @@ det = ord(MM)>valor_critico;
 
 %avaliar se atende o NDC 
 cont = 0; 
-dr =0; 
+dr = 0; 
 
 for ii = 1:size(MM,1) 
    
-    cont = det(ii)+cont*det(ii); %conta o número de detecções consecutivas 
+    cont = det(ii)+cont*det(ii); % conta o número de detecções consecutivas 
     
     if cont == NDC
         dr = 1;
