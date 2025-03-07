@@ -27,7 +27,7 @@ This unified MATLAB application:
 - v0.1: [07 03 2025 10:45] 
     > DataLoader with FFT functional for exp and sim! :)
 
-- v0.2: [] 
+- v0.2: [07 03 2025 16:42]
     > Preprocessing functional for exp and sim, signal recompute added
 
 - v0.3: [] 

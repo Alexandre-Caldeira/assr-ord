@@ -178,10 +178,12 @@ classdef DataLoader
             for channel = 1:obj.nChannels
                 for epoch = 1:obj.duration
 
-                    obj.signals(:,epoch,channel) = awgn( ... % add white gaussian noise
-                        obj.signals(:,epoch,channel), ... % to this section of signal
-                        obj.SNRfun(),'measured','db')'; % with this SNR in measured dB
+                    x = awgn( ... % add white gaussian noise
+                            obj.signals(:,epoch,channel), ... % to this section of signal
+                            obj.SNRfun(),'measured','db')'; % with this SNR in measured dB
 
+                    % Scale to uV
+                    obj.signals(:,epoch,channel)  = (10^-6) * x;  
                 end
             end
 
@@ -195,7 +197,7 @@ classdef DataLoader
             obj.nChannels= numel(obj.channels);
             obj.SIGNALS = zeros(obj.nBins, obj.duration, obj.nChannels);
 
-            for channel = 1:obj.nChannels
+            for channel = obj.channels
                 for epoch = 1:obj.duration
                     temp = fft(squeeze(obj.signals(:,epoch,channel)),obj.nfft, 1); 
                     obj.SIGNALS(:,epoch,channel) = temp(1:obj.nBins); 
@@ -244,8 +246,7 @@ classdef DataLoader
                     'Consider lowering exam duration.'])
             end
 
-            obj.channels = channelsIndices;
-            obj.nChannels = numel(channelsIndices);
+            obj.duration = newDuration;
             obj = obj.computeFFT();
             
         end

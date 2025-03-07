@@ -4,14 +4,11 @@ close all;
 clc;
 
 %% Test Pipeline
-dtl = DataLoader('exp');
+dtl = DataLoader('sim');
+dtl = dtl.resetDuration(120);
 ppc = PreProcessor();
 
-random_electrode = randi([1, numel(dtl.zanoteliLeads)],1,1);
-random_epoch = randi([1, dtl.zanoteliSuggestedMMax(dtl.zanoteliStimulusIndex)],1,1);
-random_stimulus = randi([1, numel(dtl.zanoteliStimulusNames)-1],1,1);
-random_subject = randi([1, 11],1,1);
-
+% -1 excludes ESP stimulus (less than 20 secs => not enough for filter)
 % Exam is ESP stimulus on subject Er,
 %  measuring on FC for 120 seconds. => cant filter if lower than 48 windows
 % random_electrode = 5;
@@ -19,13 +16,23 @@ random_subject = randi([1, 11],1,1);
 % random_stimulus = 6;
 % random_subject = 4;
 
-dtl = dtl.resetExam(random_subject, random_stimulus);
+random_stimulus_fun = @() randi([1, numel(dtl.zanoteliStimulusNames)-1],1,1);
+random_electrode_fun = @() randi([1, numel(dtl.zanoteliLeads)],1,1);
+% random_epoch_fun = @() randi([1, dtl.zanoteliSuggestedMMax(dtl.zanoteliStimulusIndex)],1,1);
+% random_subject_fun = @() randi([1, 11],1,1);
 
-new_random_leads = dtl.channels(new_random_leads);
-dtl.zanoteliLeads(dtl.channels(new_random_leads))
-dtl = dtl.resetChannels(dtl.channels(new_random_leads));
+% dtl.inspectExam()
+% dtl = dtl.resetExam(random_subject_fun(), random_stimulus_fun());
+% dtl.inspectExam()
 
+% random_stimulus = random_stimulus_fun();
+random_electrode = random_stimulus_fun();
+random_epoch = random_stimulus_fun();
+% random_subject = random_stimulus_fun();
 
+new_random_leads = dtl.channels(randi([1, 16],1,5));
+dtl.zanoteliLeads(new_random_leads)
+dtl = dtl.resetChannels(new_random_leads);
 
 original_epoch = dtl.signals(:,random_epoch,random_electrode);
 original_freq_sample = dtl.SIGNALS(:,random_epoch,random_electrode); 
@@ -45,6 +52,8 @@ filtered_epoch = dtl.signals(:,random_epoch,1);
 filtered_freq_sample = dtl.SIGNALS(:,random_epoch,1); 
 
 dtl.inspectExam()
+
+disp(dtl)
 
 %% Show Results
 exam_time = (random_epoch*dtl.fs:random_epoch*dtl.fs+numel(original_epoch)-1)';
