@@ -3,25 +3,19 @@ classdef DataLoader
 % out: Y (freq. data for testing)
 
     properties
-
-        timer   % obj timer
-        id      % obj id
+       
         signals % y (timeseries data, MC sim or exp aquisition)
         SIGNALS % frequency data
         signalFrequencies = [82    84    86    88    90    92    94    96];
         noiseFrequencies = [];
-
-        mode    % simulation mode 'sim' or 'exp'
-        inPath  = 'C:\PPGEE\SBEB_CBA_24\CGST_figuras\Sinais_EEG\' % where y comes from
-        outPath % where Y is saved
         
         % Processing Parameters
-        duration = [60];  % exam duration [secs], per zanoteliStimulusIndex intensity
         channels = 1:16;  % Index for EEG leads (channels) in data
         fs       = 1000;  % Sampling frequency (Hz)
         nfft              % Number of FFT points per epoch (1 sec window in NIASv1)
-        nBins             % ???
-        nChannels
+        nBins             % Number of 'positive frequency' values on the spectrum
+        nChannels         % length of channels vector
+        duration = [60];  % exam duration [secs], per zanoteliStimulusIndex intensity
         totalSamples
 
         % For MC Simulation        
@@ -40,6 +34,14 @@ classdef DataLoader
                              'So'; 'Qu'; 'Vi'; 'Sa'; 'Ti';'Wr'};
         zanoteliLeads = {'FC'; 'F4'; 'T6'; 'P4'; 'T4'; 'Oz'; 'C4'; 'T5';...
                          'P3'; 'F7'; 'F3'; 'T3'; 'C3'; 'Fz'; 'Pz'; 'Cz'}
+
+        % Utils
+        timer   % obj timer
+        id      % obj id
+        
+        inPath  = 'C:\PPGEE\SBEB_CBA_24\CGST_figuras\Sinais_EEG\' % where y comes from
+        outPath % where Y is saved
+        mode    % simulation mode 'sim' or 'exp'
         
 
     end
@@ -123,7 +125,7 @@ classdef DataLoader
 
         function inspectExam(obj)
             fprintf(...
-            '\n\tExam is %s stimulus on subject %s,\n\t measuring on %s for %s seconds.\n', ...
+            '\n\tExam is %s stimulus on subject %s,\n\t measuring on %s for %s seconds.\n\n', ...
                 cell2mat(obj.zanoteliStimulusNames(obj.zanoteliStimulusIndex)), ...
                 cell2mat(obj.zanoteliSubjects(obj.zanoteliSubjectIndex,:)),...
                 cell2mat(obj.zanoteliLeads(1)),...
@@ -249,6 +251,10 @@ classdef DataLoader
             obj.duration = newDuration;
             obj = obj.computeFFT();
             
+        end
+
+        function age(obj)
+            fprintf('\n\tThis DataLoader was built %0.2f seconds ago.\n\n', round(toc(obj.timer),2))
         end
 
     end

@@ -30,12 +30,12 @@ classdef ORDCalculator
             MSCmatrix = zeros([obj.dataloader.nBins, nWindows, ...
                                     obj.dataloader.nChannels]);
             
-            for channel = obj.dataloader.channels
+            for channel = 1:obj.dataloader.channels
                 for window_index = 1:numel(epochs)-1
                     epochStart = epochs(window_index);
                     epochEnd = epochs(window_index+1)-1;                     
                 
-                    current_epoch = squeeze(Y(:,epochStart:epochEnd,channel));
+                    current_epoch = Y(:,epochStart:epochEnd,channel);
     
                     obj = obj.zanotelli_msc_fft(current_epoch, M);
                     MSCmatrix(:, window_index, channel) = obj.latestMSC;
@@ -58,7 +58,8 @@ classdef ORDCalculator
             % Y =fft(reshape(y,tamanho_janela,M)); %
             
             %MSC
-            obj.latestMSC =  abs(sum(Y,2)).^2./(M*sum(abs(Y).^2,2));
+            latestMSC =  abs(sum(Y,2)).^2./(M*sum(abs(Y).^2,2));
+            latestMSC 
         end
 
         % Not working! Datastructure bugs:

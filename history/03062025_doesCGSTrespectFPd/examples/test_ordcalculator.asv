@@ -1,0 +1,90 @@
+%% Clear workspace and initialize parameters
+clearvars; 
+close all; 
+clc;
+% Load object with default exam
+dtl = DataLoader('exp');
+dtl = dtl.computeFFT();
+
+%% Prep Pipeline
+
+% Get random exam 
+[random_stimulus,random_subject,...
+random_electrode,random_epoch] = random_exam_args(dtl);
+
+% Reset data and declare exam on terminal
+dtl = dtl.resetExam(random_subject, random_stimulus);
+dtl.inspectExam()
+
+% Save unfiltered data
+original_epoch = dtl.signals(:,random_epoch,random_electrode);
+original_freq_sample = dtl.SIGNALS(:,random_epoch,random_electrode); 
+
+% Filter data and recompute signals
+ppc = PreProcessor();
+ppc = ppc.zanoteliPreProcessing(dtl);
+ppc = ppc.antunesFiltering(dtl);
+dtl.signals = ppc.filteredSignals;
+dtl = dtl.computeFFT();
+
+% Save filtered data
+filtered_epoch = dtl.signals(:,random_epoch,random_electrode);
+filtered_freq_sample = dtl.SIGNALS(:,random_epoch,random_electrode); 
+
+%% Test Pipeline
+
+ordc = ORDCalculator(dtl);
+ordc = ordc.compute_all_msc(32);
+
+filtered_freq_ord = ord.MSC(:,random_epoch, random_electrode);
+
+% Show parameters
+ordc.age()
+% disp(ppc)
+% disp(dtl)
+% dtl.age()
+
+%% Show Results
+lead_name = dtl.zanoteliLeads(random_electrode);
+random_epoch = random_epoch+2; % add 2 seconds removed from preprocessed
+exam_time = (random_epoch*dtl.fs:random_epoch*dtl.fs+numel(original_epoch)-1)';
+
+
+% figure(1)   
+% subplot(121)
+% plot(exam_time,original_epoch)
+% grid on 
+% xlabel('Time [ms]')
+% ylabel('Voltage [V]')
+% title(['Measures Aquired on' lead_name])
+% 
+% subplot(122)
+% plot(exam_time,filtered_epoch)
+% grid on 
+% xlabel('Time [ms]')
+% ylabel('Voltage [V]')
+% title(['Processed signal from' lead_name])
+
+
+figure(2)
+
+subplot(131)
+stem(abs(original_freq_sample),'filled', 'MarkerSize',3,'LineWidth',0.1)
+grid on 
+xlabel('Frequency [Hz]')
+ylabel('Voltage [?]')
+title(['PSD aquired on' lead_name])
+
+subplot(132)
+stem(abs(filtered_freq_sample),'filled', 'MarkerSize',3,'LineWidth',0.1)
+grid on 
+xlabel('Frequency [Hz]')
+ylabel('Voltage [?]')
+title(['PSD processed from' lead_name])
+
+subplot(133)
+stem(filtered_freq_ord,'filled', 'MarkerSize',3,'LineWidth',0.1)
+grid on 
+xlabel('Frequency [Hz]')
+ylabel('Voltage [?]')
+title(['MSC filtered from' lead_name])

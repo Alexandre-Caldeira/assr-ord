@@ -84,21 +84,21 @@ ylabel('Voltage [V]')
 title(['Filtered signal from' lead_name])
 
 subplot(234)
-stem(abs(original_freq_sample))
+stem(abs(original_freq_sample),'filled', 'MarkerSize',3,'LineWidth',0.1)
 grid on 
 xlabel('Frequency [Hz]')
 ylabel('Voltage [?]')
 title(['PSD aquired on' lead_name])
 
 subplot(235)
-stem(abs(processed_freq_sample))
+stem(abs(processed_freq_sample),'filled', 'MarkerSize',3,'LineWidth',0.1)
 grid on 
 xlabel('Frequency [Hz]')
 ylabel('Voltage [?]')
 title(['PSD processed from' lead_name])
 
 subplot(236)
-stem(abs(filtered_freq_sample))
+stem(abs(filtered_freq_sample),'filled', 'MarkerSize',3,'LineWidth',0.1)
 grid on 
 xlabel('Frequency [Hz]')
 ylabel('Voltage [?]')
