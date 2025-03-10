@@ -141,11 +141,9 @@ classdef DataLoader
                                     numel(obj.selectedZanoteliSubjects));
             
             for stimulusIndex = obj.selectedZanoteliStimuli
-                current_stim = cell2mat(obj.zanoteliStimulusNames(stimulusIndex));
-
                 for subjectIndex = obj.selectedZanoteliSubjects
-                    obj = obj.loadEEGData(subjectIndex, current_stim);
-                    obj.groupSignals{stimulusIndex,subjectIndex} = obj.signals;
+                    obj.groupSignals{stimulusIndex,subjectIndex} = ...
+                        loadEEGData(stimulusIndex,subjectIndex);
                 end
             end
         end
@@ -156,10 +154,11 @@ classdef DataLoader
             
             for stimulusIndex = obj.selectedZanoteliStimuli
                 for subjectIndex = obj.selectedZanoteliSubjects
-                    obj.signals = cell2mat(obj.groupSignals(stimulusIndex,subjectIndex));
+                    obj.signals = obj.groupSignals{stimulusIndex,subjectIndex};
+                    obj = ob
 
-                    obj = obj.computeFFT();
-                    obj.groupSIGNALS{stimulusIndex,subjectIndex} = obj.SIGNALS;
+                    obj.groupSIGNALS{stimulusIndex,subjectIndex} = ...
+                        loadEEGData(stimulusIndex,subjectIndex);
                 end
             end
         end

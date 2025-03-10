@@ -2,31 +2,29 @@
 clearvars; 
 close all; 
 clc;
-% Load object with default exam
-dtl = DataLoader('exp');
-dtl = dtl.computeFFT();
+
+% Get random exam 
+[random_stimulus,random_subject,...
+    random_electrode,random_epoch] = random_exam_args(DataLoader('exp'));
+
+% Force 70dB for testsing with 50 seconds
+% random_stimulus = 1;
+% random_epoch = 35;
+
+% Load object with default exam and reset data
+dtl = DataLoader('exp').resetExam(random_subject, random_stimulus);
+
+% Show random exam details on terminal
+dtl.inspectExam()
 
 %% Prep Pipeline
 
-% Get random exam 
-[~,random_subject,random_electrode,~] = random_exam_args(dtl);
-
-% Force 70dB for testsing with 50 seconds
-random_stimulus = 1;
-random_epoch = 35;
-
-% Reset data and declare exam on terminal
-dtl = dtl.resetExam(random_subject, random_stimulus);
-dtl.inspectExam()
-
-% Save unfiltered data
+% Save unfiltered data (input)
 original_epoch = dtl.signals(:,random_epoch,random_electrode);
-original_freq_sample = dtl.SIGNALS(:,random_epoch,random_electrode); 
+original_freq_sample = dtl.SIGNALS(:,random_epoch,random_electrode);
 
 % Filter data and recompute signals
-ppc = PreProcessor();
-ppc = ppc.zanoteliPreProcessing(dtl);
-ppc = ppc.antunesFiltering(dtl);
+ppc = PreProcessor().zanoteliPreProcessing(dtl).antunesFiltering(dtl);
 dtl.signals = ppc.filteredSignals;
 dtl = dtl.computeFFT();
 
@@ -37,62 +35,19 @@ filtered_freq_sample = dtl.SIGNALS(:,random_epoch,random_electrode);
 %% Test Pipeline
 
 ordc = ORDCalculator(dtl);
-ordc = ordc.compute_all_msc(10);
+ordc = ordc.compute_msc_on_all_channels();
 
 filtered_freq_ord = ordc.latestMSC;
 
 % Show parameters
 ordc.age()
-% disp(ppc)
-% disp(dtl)
-% dtl.age()
+disp(size(dtl.SIGNALS))
+disp(ordc)
 
 %% Show Results
 lead_name = dtl.zanoteliLeads(random_electrode);
 random_epoch = random_epoch+2; % add 2 seconds removed during preprocessing
 exam_time = (random_epoch*dtl.fs:random_epoch*dtl.fs+numel(original_epoch)-1)';
-
-% figure(1)   
-% subplot(121)
-% plot(exam_time,original_epoch)
-% grid on 
-% xlabel('Time [ms]')
-% ylabel('Voltage [V]')
-% title(['Measures Aquired on' lead_name])
-% 
-% subplot(122)
-% plot(exam_time,filtered_epoch)
-% grid on 
-% xlabel('Time [ms]')
-% ylabel('Voltage [V]')
-% title(['Processed signal from' lead_name])
-
-
-test_result = figure(2);
-subplot(131)
-stem(abs(original_freq_sample),'filled', 'MarkerSize',3,'LineWidth',0.1)
-grid on 
-xlabel('Frequency [Hz]')
-ylabel('Voltage [?]')
-xlim([0,dtl.nBins])
-title(['PSD aquired on' lead_name])
-
-subplot(132)
-stem(abs(filtered_freq_sample),'filled', 'MarkerSize',3,'LineWidth',0.1)
-grid on 
-xlabel('Frequency [Hz]')
-ylabel('Voltage [?]')
-xlim([0,dtl.nBins])
-title(['PSD processed from' lead_name])
-
-subplot(133)
-stem(filtered_freq_ord,'filled', 'MarkerSize',3,'LineWidth',0.1)
-grid on 
-xlabel('Frequency [Hz]')
-ylabel('Voltage [?]')
-title(['Last MSC filtered from' lead_name])
-xlim([0,dtl.nBins])
-set(test_result , 'WindowState', 'maximized');
 
 exam = figure(3);
 xlabel('Frequency [Hz]')
@@ -122,5 +77,3 @@ for window_index = 1:nWindows
         delete(t)
     end
 end
-
-

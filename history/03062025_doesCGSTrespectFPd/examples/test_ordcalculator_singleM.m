@@ -24,9 +24,7 @@ original_epoch = dtl.signals(:,random_epoch,random_electrode);
 original_freq_sample = dtl.SIGNALS(:,random_epoch,random_electrode); 
 
 % Filter data and recompute signals
-ppc = PreProcessor();
-ppc = ppc.zanoteliPreProcessing(dtl);
-ppc = ppc.antunesFiltering(dtl);
+ppc = PreProcessor().zanoteliPreProcessing(dtl).antunesFiltering(dtl);
 dtl.signals = ppc.filteredSignals;
 dtl = dtl.computeFFT();
 
@@ -35,9 +33,9 @@ filtered_epoch = dtl.signals(:,random_epoch,random_electrode);
 filtered_freq_sample = dtl.SIGNALS(:,random_epoch,random_electrode); 
 
 %% Test Pipeline
-
+M = 10;
 ordc = ORDCalculator(dtl);
-ordc = ordc.msc_on_all_channels(10);
+ordc = ordc.compute_msc_on_all_channels(M);
 
 filtered_freq_ord = ordc.latestMSC;
 

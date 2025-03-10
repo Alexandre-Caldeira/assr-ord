@@ -5,8 +5,10 @@ classdef ORDCalculator
         MSC
 
         % Calculator Parameters
-        startWindow = 1;
+        startWindow
         windowStepSize
+        lastWindow
+        epochs
 
         % Utils
         timer   % obj timer
@@ -18,30 +20,89 @@ classdef ORDCalculator
             obj.timer = tic;
             obj.id = [num2str(keyHash(obj.timer))];
             obj.dataloader = dataloader;
+            
+            obj.startWindow = 1;
+            obj.windowStepSize = 24;
+            obj.lastWindow = dataloader.duration;
+            obj.epochs = obj.startWindow:obj.windowStepSize:obj.lastWindow;
+
         end
 
-        function obj = msc_on_all_channels(obj,M)
-            Y  = obj.dataloader.SIGNALS;
+        function obj = compute_msc(obj, p)
+            arguments
+                obj % The ORDCalculator class
+
+                % p: additional parameters, passed as Name-Value arguments
+                %    declared below, including their default values.
+                p.dataloader = obj.dataloader;
+                p.channels = obj.dataloader.channels;
+
+                p.startWindow = obj.startWindow;
+                p.windowStepSize = obj.windowStepSize;
+                p.lastWindow = obj.lastWindow;
+
+                % parameters for exam reload (should this be here?)
+                p.selectedZanoteliSubjects
+                p.selectedZanoteliStimuli
+
+                % epochCalcMethod define how
+                p.epochCalcMethod  {mustBeMember(p.epochCalcMethod,...
+                                    {'zanoteli','chesnaye'})}  = 'zanoteli'
+                p.K
+                                
+            end
+
+            switch p.epochCalcMethod
+                case 'zanoteli'
+                    obj.epochs = p.startWindow:p.windowStepSize:p.lastWindow;
+                    p.nWindows = numel(obj.epochs);
+
+                case 'chesnaye'    
+                    obj.epochs = ceil(linspace(p.startWindow,p.lastWindow,p.K));
+                    p.nWindows = p.K;
+
+            end
+
+            Y  = obj.dataloader.SIGNALS;            
+            obj.MSC = zeros([obj.dataloader.nBins, nWindows, p.nChannels]);
+
+            for channel = p.channels
+                for epoch_index = 1:nWindows-1
+                    epochStart = obj.epochs(epoch_index);
+                    epochEnd = obj.epochs(epoch_index+1)-1;
+                    current_epoch = squeeze(Y(:,epochStart:epochEnd,channel));
+                    
+                    obj = obj.zanotelli_msc_fft(current_epoch, obj.windowStepSize);
+                    obj.MSC(:, window_index, channel) = obj.latestMSC;
+                end
+            end
+
+        end
+
+        function obj = compute_msc_on_all_channels(obj,varargin)
+            if nargin>1
+                obj.windowStepSize = varargin{1};
+            end
+
+            Y  = obj.dataloader.SIGNALS;            
 
             % Full MSC matrix is nBins x M x nChannels
-            nWindows = floor((size(Y,2)-1)/M);
-            % obj.windowStepSize = M;
-            epochs = obj.startWindow:M:size(Y,2);
-            MSCmatrix = zeros([obj.dataloader.nBins, nWindows, ...
+            nWindows = floor((size(Y,2)-1)/obj.windowStepSize);
+            obj.epochs = obj.startWindow:obj.windowStepSize:obj.lastWindow;
+            obj.MSC = zeros([obj.dataloader.nBins, nWindows, ...
                                     obj.dataloader.nChannels]);
             
             for channel = obj.dataloader.channels
-                for window_index = 1:numel(epochs)-1
-                    epochStart = epochs(window_index);
-                    epochEnd = epochs(window_index+1)-1;                     
+                for window_index = 1:numel(obj.epochs)-1
+                    epochStart = obj.epochs(window_index);
+                    epochEnd = obj.epochs(window_index+1)-1;                     
                 
                     current_epoch = squeeze(Y(:,epochStart:epochEnd,channel));
     
-                    obj = obj.zanotelli_msc_fft(current_epoch, M);
-                    MSCmatrix(:, window_index, channel) = obj.latestMSC;
+                    obj = obj.zanotelli_msc_fft(current_epoch, obj.windowStepSize);
+                    obj.MSC(:, window_index, channel) = obj.latestMSC;
                 end
             end
-            obj.MSC = MSCmatrix;
         end
                 
 
@@ -61,6 +122,15 @@ classdef ORDCalculator
             obj.latestMSC =  abs(sum(Y,2)).^2./(M*sum(abs(Y).^2,2));
         end
 
+
+        function age(obj)
+            fprintf( ...
+                '\n\tThis ORDCalculator was built %0.2f seconds ago.\n\n', ...
+                round(toc(obj.timer),2))
+        end
+
+
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         % Not working! Datastructure bugs:
         function [KA,F,KAcrit] = felix_aMSC(obj,tj,alpha)
             y = obj.dataloader.signals;
@@ -237,10 +307,7 @@ classdef ORDCalculator
             
         end
 
-        function age(obj)
-            fprintf('\n\tThis ORDCalculator was built %0.2f seconds ago.\n\n', round(toc(obj.timer),2))
-        end
-
+        
     end
     
 end
