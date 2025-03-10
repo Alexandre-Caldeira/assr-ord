@@ -8,19 +8,27 @@ clc;
 dtl = DataLoader('exp');
 
 % Define size of vector with randomly selected exams
-nSubj = 7;
-nStim = 4;
-
-% Randomly select subjects and stimuli without replacement
-% dtl.selectedZanoteliSubjects = randperm(numel(dtl.zanoteliSubjects),nSubj);
-% dtl.selectedZanoteliStimuli = randperm(numel(dtl.zanoteliStimulusNames),nStim);
+% and randomly select subjects and stimuli without replacement
+nSubj = 5;
+nStim = 3;
+dtl.selectedZanoteliSubjects = randperm(numel(dtl.zanoteliSubjects),nSubj);
+dtl.selectedZanoteliStimuli = randperm(numel(dtl.zanoteliStimulusNames),nStim);
 
 % Or choose all
-dtl.selectedZanoteliSubjects = 1:numel(dtl.zanoteliSubjects);
-dtl.selectedZanoteliStimuli = 1:numel(dtl.zanoteliStimulusNames);
+% nSubj = 11;
+% nStim = 5;
+% dtl.selectedZanoteliSubjects = 1:numel(dtl.zanoteliSubjects);
+% dtl.selectedZanoteliStimuli = 1:numel(dtl.zanoteliStimulusNames);
 
 % Load data and compute FFT
-dtl = dtl.loadMultiplePatientEEG().computeMultipleFFTs();
+dtl = dtl.loadBulkEEGData(); %.computeBulkFFTs();
+
+% Preprocess and filter all data
+ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
+
+% Reset SIGNALS to filtered for display
+dtl.groupSignals = ppc.groupFilteredSignals;
+dtl = dtl.computeBulkFFTs();
 
 %% Show results
 % Show object
@@ -38,12 +46,12 @@ for i = 1:3
     current_signal = cell2mat( ...
         dtl.groupSignals(randomly_shown_stim(i),randomly_shown_subj(i)));
 
-    random_epoch = randi([1,size(current_signal,2)],1);
-    current_signal = current_signal(:,random_epoch,randomly_shown_electrode(i));
-
     current_SIGNAL =  cell2mat( ...
         dtl.groupSIGNALS(randomly_shown_stim(i),randomly_shown_subj(i)));
     
+    random_epoch = randi([1,size(current_SIGNAL,2)],1);
+
+    current_signal = current_signal(:,random_epoch,randomly_shown_electrode(i));    
     lead_name = dtl.zanoteliLeads(randomly_shown_electrode(i));
     random_epoch = random_epoch+2; % add 2 seconds removed during preprocessing
     exam_time = (random_epoch*dtl.fs:random_epoch*dtl.fs+numel(current_signal)-1)';

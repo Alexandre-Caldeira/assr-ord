@@ -74,8 +74,14 @@ classdef DataLoader
     
             obj.nfft = obj.fs; 
             obj.nBins = floor(obj.fs/2)+1; % ...
-            obj.noiseFrequencies = randi([300 500],1, ...
-                                    numel(obj.signalFrequencies));
+
+            % Randomly selects noise frequencies (above 300 Hz) 
+            % Wihouth replacement
+            obj.noiseFrequencies = 300+randperm(200,numel(obj.signalFrequencies));
+            
+            % With replacement
+            % obj.noiseFrequencies = randi([300 500],1, ...
+            %                         numel(obj.signalFrequencies));
 
             % By default, SNR is:
             % Adiciona ruido gaussiano branco com SNR aleatoria 
@@ -136,7 +142,7 @@ classdef DataLoader
 
         end
 
-        function obj = loadMultiplePatientEEG(obj)
+        function obj = loadBulkEEGData(obj)
             obj.groupSignals = cell(numel(obj.selectedZanoteliStimuli), ...
                                     numel(obj.selectedZanoteliSubjects));
             
@@ -150,13 +156,20 @@ classdef DataLoader
             end
         end
 
-        function obj = computeMultipleFFTs(obj)
+        function obj = computeBulkFFTs(obj)
             obj.groupSIGNALS = cell(numel(obj.selectedZanoteliStimuli), ...
                                     numel(obj.selectedZanoteliSubjects));
             
             for stimulusIndex = obj.selectedZanoteliStimuli
                 for subjectIndex = obj.selectedZanoteliSubjects
+
+                    % Reset signal and parameters
                     obj.signals = cell2mat(obj.groupSignals(stimulusIndex,subjectIndex));
+                    obj.fs = size(obj.signals, 1);
+                    obj.nfft = obj.fs;
+                    obj.nBins = floor(obj.fs/2)+1;
+                    obj.zanoteliStimulusIndex = stimulusIndex;
+                    obj.zanoteliSubjectIndex = subjectIndex;
 
                     obj = obj.computeFFT();
                     obj.groupSIGNALS{stimulusIndex,subjectIndex} = obj.SIGNALS;
