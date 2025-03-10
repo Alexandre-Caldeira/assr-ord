@@ -9,8 +9,7 @@ dtl = dtl.computeFFT();
 %% Prep Pipeline
 
 % Get random exam 
-[random_stimulus,random_subject,...
-random_electrode,random_epoch] = random_exam_args(dtl);
+[~,random_subject,random_electrode,~] = random_exam_args(dtl);
 
 % Force 70dB for testsing with 50 seconds
 random_stimulus = 1;

@@ -20,7 +20,7 @@ classdef ORDCalculator
             obj.dataloader = dataloader;
         end
 
-        function obj = compute_all_msc(obj,M)
+        function obj = msc_on_all_channels(obj,M)
             Y  = obj.dataloader.SIGNALS;
 
             % Full MSC matrix is nBins x M x nChannels
