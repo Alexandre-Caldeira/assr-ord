@@ -1,12 +1,10 @@
 %% Clear workspace and initialize parameters
-clearvars; 
-close all; 
-clc;
+clearvars; close all; clc;
 
-%% Test pipeline
 % Load object with default exam and reset data
 dtl = DataLoader('exp');
 
+%% Test pipeline
 % Define size of vector with randomly selected exams
 % and randomly select subjects and stimuli without replacement
 % nSubj = 5;
@@ -20,23 +18,44 @@ dtl = DataLoader('exp');
 % dtl.selectedZanoteliSubjects = 1:numel(dtl.zanoteliSubjects);
 % dtl.selectedZanoteliStimuli = 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
 
-% Load data and compute FFT
-% dtl = dtl.loadBulkEEGData(); %.computeBulkFFTs();
-dtl.inspectExam()
-
-% Preprocess and filter all data
-ppc = PreProcessor().zanoteliPreProcessing(dtl).antunesFiltering(dtl);
+% Load data, preprocess and filter
+dtl = dtl.loadBulkEEGData();
+ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
 
 % Reset SIGNALS to filtered for display
-dtl.signals = ppc.filteredSignals;
-% dtl.groupSignals = ppc.groupFilteredSignals;
-% dtl = dtl.computeBulkFFTs();
-dtl = dtl.computeFFT();
+dtl.groupSignals = ppc.groupFilteredSignals;
+dtl = dtl.computeBulkFFTs();
 
 % Compute objective response detector (MSC)
-ordc = ORDCalculator(dtl);
-ordc = ordc.compute_msc(startWindow=4, windowStepSize=15);
+% Comportamento:
+% O que precisamos definir? Janelas! 
+% (Onde cada começa, quantas amostras têm.)
+%
+% Calculamos a posição de inicio e fim delas com base em 4 parametros:
+% 1. inicio: Instante de inicio do exame
+% 2. tamanho: Numero de testes OU Numero de amostras por teste OU Intervalo entre testes;
+% 3. paradaT (limita tempo): duração máxima do exame OU numero deamostras/janelas;
+% 4. paradaI (limita dados): NDC, futilidade/detecção-CGST, variância das amostras (SNR). 
+%
+% 
 
+% compute_bulk_msc( ...
+% startWindows = 1:5:21, ...
+% windowStepSizes = [5 18 24 32], ...
+% channels = [1 8 16], ...
+% lastWindowCalcMethod = 'flexible', ... % maxFromStart, maxFromLast, exactK, flexible
+% stepType = 'fixedSize'... % minToK, minToMax, minToFix, withResampling, default = fixedSize
+%     ...
+%     );
+
+% Specify epoch parameters and compute MSCs accordingly
+ordc = ORDCalculator(dtl).fit_epochs( ...
+    startWindows = [1 5 15], ...
+    windowStepSizes = [5 18 24 32], ...
+    channels = [1 8 16], ...
+    lastWindowCalcMethod = 'maxFromStart', ... % maxFromStart, maxFromLast, exactK, fromSizeType
+    sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
+    ).compute_bulk_msc();
 
 %% Show results
 % Show object
@@ -78,5 +97,4 @@ for window_index = 1:nWindows
 end
 
     
-
 

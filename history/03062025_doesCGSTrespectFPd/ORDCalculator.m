@@ -11,7 +11,9 @@ classdef ORDCalculator
         startWindow
         windowStepSize
         lastWindow
+        nWindows    % number of Windows (may match K, or not)
         epochs
+        K           % total number of tests to be applied on the ORD
 
         % Utils
         timer   % obj timer
@@ -27,8 +29,139 @@ classdef ORDCalculator
             obj.startWindow = 1;
             obj.windowStepSize = 24;
             obj.lastWindow = dataloader.duration;
-            obj.epochs = obj.startWindow:obj.windowStepSize:obj.lastWindow;
+            % obj.epochs = obj.startWindow:obj.windowStepSize:obj.lastWindow;
 
+        end
+
+        function obj = fit_epochs(obj, p)
+             arguments
+                obj % The ORDCalculator class
+
+                % p: additional parameters, passed as Name-Value arguments
+                %    declared below, including their default values.
+                p.dataloader = obj.dataloader;
+                p.channels = obj.dataloader.channels;
+                p.nChannels = numel(obj.dataloader.channels);
+
+                p.subjectIndices = [1:11];
+                p.stimulusIndices = [1:5];
+
+                p.startWindows = [1];
+                p.windowStepSizes = [24 32];
+
+                % How will the index of the last window be computed?
+                p.lastWindowCalcMethod {mustBeMember(p.lastWindowCalcMethod,...
+                                    {'maxFromStart', 'maxFromLast', 'exactK', 'fromSizeType'})} = 'maxFromStart'; 
+                
+                % How will the number of samples in each window be computed?
+                p.sizeType {mustBeMember(p.sizeType,...
+                                    {'fixedSize', 'minToMax', 'minToFix', 'withResampling'})} = 'fixedSize';
+                
+                % Are epochs for a single ORD or bulk ORDs?
+                p.single_or_bulk {mustBeMember(p.single_or_bulk,{'single', 'bulk'})} = 'single'
+                p.K
+                p.nWindows
+             end
+            
+             method = [p.single_or_bulk,'_',p.sizeType,'_',p.lastWindowCalcMethod];
+             switch method
+                 case 'bulk_fixedSize_maxFromStart'
+                     % This is not quite right indexing allocation but
+                     % works on MATLAB... fix later! TODO
+                     obj.epochs = cell(numel(p.subjectIndices),numel(p.stimulusIndices));
+                     obj.nWindows = obj.epochs;
+                     obj.K = obj.epochs;
+
+                     for stimulus_index = p.stimulusIndices
+                         for subject_index = p.subjectIndices
+                             this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
+                             this_lastWindow = size(this_exam, 2);
+
+                             obj.epochs(stimulus_index,subject_index) = p.startWindow:p.windowStepSize:this_lastWindow;
+                             
+                             obj.nWindows(stimulus_index,subject_index) = numel(obj.epochs)-1;
+                             obj.K(stimulus_index,subject_index) = p.nWindows;
+                         end
+                     end
+
+                 case 'bulk_fixedSize_maxFromLast'
+                     obj.epochs = cell(numel(p.subjectIndices),numel(p.stimulusIndices));
+                     obj.nWindows = obj.epochs;
+                     obj.K = obj.epochs;
+
+                     for stimulus_index = p.stimulusIndices
+                         for subject_index = p.subjectIndices
+                             this_firstWindow = cell2mat(p.startWindows(stimulus_index,subject_index));
+
+                             obj.epochs(stimulus_index,subject_index) = flip(p.lastWindow:-p.windowStepSize:this_firstWindow);
+                             
+                             obj.nWindows(stimulus_index,subject_index) = numel(obj.epochs)-1;
+                             obj.K(stimulus_index,subject_index) = p.nWindows;
+                         end
+                     end
+
+                 case 'bulk_fixedSize_exactK'
+                     exactK = p.K;
+
+                     obj.epochs = cell(numel(p.subjectIndices),numel(p.stimulusIndices));
+                     obj.nWindows = obj.epochs;
+                     obj.K = obj.epochs;
+
+                     for stimulus_index = p.stimulusIndices
+                         for subject_index = p.subjectIndices
+
+                             % Use user-defined first window, 
+                             if isa(p.startWindows,'cell')
+                                 this_firstWindow = cell2mat(p.startWindows(stimulus_index,subject_index));
+                             else % or just the first sample if not defined:
+                                 this_firstWindow = 1;
+                             end
+
+                             this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
+                             this_lastWindow = size(this_exam, 2);
+
+                             obj.epochs(stimulus_index,subject_index) = ceil(linspace(this_firstWindow,this_lastWindow,p.K));
+                             
+                             obj.nWindows(stimulus_index,subject_index) = exactK;
+                             obj.K(stimulus_index,subject_index) = exactK;
+                         end
+                     end
+
+                 case 'bulk_fizedSize_fromSizeType'
+                     obj.epochs = cell(numel(p.subjectIndices),numel(p.stimulusIndices));
+                     obj.nWindows = obj.epochs;
+                     obj.K = obj.epochs;
+
+                     for stimulus_index = p.stimulusIndices
+                         for subject_index = p.subjectIndices
+                             this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
+                             this_lastWindow = size(this_exam, 2);
+
+                             obj.epochs(stimulus_index,subject_index) = p.startWindow:p.windowStepSize:this_lastWindow;
+                             
+                             obj.nWindows(stimulus_index,subject_index) = numel(obj.epochs)-1;
+                             obj.K(stimulus_index,subject_index) = p.nWindows;
+                         end
+                     end
+
+                     % % fix this
+                     % obj.epochs = p.startWindow:p.windowStepSize:p.lastWindow;
+                     % p.nWindows = numel(obj.epochs)-1;
+                     % p.K = p.nWindows;
+
+                 case 'single_fixedSize_maxFromStart'
+                    obj.epochs = p.startWindow:p.windowStepSize:p.lastWindow;   
+                    obj.nWindows = numel(obj.epochs)-1;
+                    obj.K = p.nWindows;
+
+                 case 'single_fixedSize_fromSizeType'
+                    obj.epochs = ceil(linspace(p.startWindow,p.lastWindow,p.K));
+                    obj.nWindows = p.K;
+
+                 otherwise
+                     error('This sizeType-lastWindowCalcMethod method pair was not implemented yet.')
+             end
+             
         end
 
         function obj = compute_msc(obj, p)
@@ -44,6 +177,7 @@ classdef ORDCalculator
                 p.startWindow = obj.startWindow;
                 p.windowStepSize = obj.windowStepSize;
                 p.lastWindow = obj.lastWindow;
+                p.epochs = -1;
 
                 % epochCalcMethod define how
                 p.epochCalcMethod  {mustBeMember(p.epochCalcMethod,...
@@ -52,18 +186,27 @@ classdef ORDCalculator
                                 
             end
 
-            switch p.epochCalcMethod
-                case 'zanoteli'
-                    obj.epochs = p.startWindow:p.windowStepSize:p.lastWindow;
-                    p.nWindows = numel(obj.epochs)-1;
-                    p.K = p.nWindows;
+            if p.epochs == -1
+                switch p.epochCalcMethod
+                    case 'zanoteli'
+                        % obj.epochs = p.startWindow:p.windowStepSize:p.lastWindow;
+                        % p.nWindows = numel(obj.epochs)-1;
+                        % p.K = p.nWindows;
+                        p.lastWindowCalcMethod = 'maxFromStart';
+                        p.sizeType = 'fixedSize';
+    
+                    case 'chesnaye'    
+                        % obj.epochs = ceil(linspace(p.startWindow,p.lastWindow,p.K));
+                        % p.nWindows = p.K;
+                        p.lastWindowCalcMethod = 'fromSizeType';
+                        p.sizeType = 'fixedSize';
+                end
 
-                case 'chesnaye'    
-                    obj.epochs = ceil(linspace(p.startWindow,p.lastWindow,p.K));
-                    p.nWindows = p.K;
-
+                obj = obj.fit_epochs(p);
+                p.nWindows = obj.nWindows;
+                p.K = obj.K;
             end
-
+            
             Y  = obj.dataloader.SIGNALS;            
             obj.MSC = zeros([obj.dataloader.nBins, p.nWindows, p.nChannels]);
 
@@ -80,6 +223,8 @@ classdef ORDCalculator
 
         end
 
+
+        % STILL UNDER DEVELOPMENT
         function obj = bulk_compute_msc(obj,p)
             arguments
                 obj % The ORDCalculator class
