@@ -37,8 +37,8 @@ dtl = dtl.computeBulkFFTs();
 % 3. paradaT (limita tempo): duração máxima do exame OU numero deamostras/janelas;
 % 4. paradaI (limita dados): NDC, futilidade/detecção-CGST, variância das amostras (SNR). 
 %
-% 
 
+% Exemplo: 
 % compute_bulk_msc( ...
 % startWindows = 1:5:21, ...
 % windowStepSizes = [5 18 24 32], ...
@@ -59,7 +59,7 @@ ordc = ORDCalculator(dtl).fit_epochs( ...
     ... % then, compute on selected channels:
     );
 
-ordc = ordc.compute_msc(channels = [1 8 16]);
+ordc = ordc.bulk_compute_msc(channels = [1 8 16]);
 
 %% Show results
 % Show object
@@ -100,5 +100,14 @@ for window_index = 1:nWindows
     end
 end
 
+
+%% UTILS
+% Count # of actual ords to compute
+ne = 0;
+for idx = 1:numel(ordc.epochs)
+    if ~isempty(cell2mat(ordc.epochs(idx)))
+        ne = ne+1;
+    end
+end
     
 

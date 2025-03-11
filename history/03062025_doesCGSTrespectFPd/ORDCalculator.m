@@ -14,8 +14,16 @@ classdef ORDCalculator
         
         epochs = []
         epochs_index_metadata
+        epochs_method
         K_stages    % total number of tests to be applied on the ORD
         nWindows    % number of Windows (may match K, or not)
+
+        subjectIndices = [1:11];
+        stimulusIndices = [1:5];
+
+        startWindows = [1];
+        windowStepSizes = [24 32];
+        lastWindows = [50];
 
         % Utils
         timer   % obj timer
@@ -45,12 +53,12 @@ classdef ORDCalculator
                 p.channels = obj.dataloader.channels;
                 p.nChannels = numel(obj.dataloader.channels);
 
-                p.subjectIndices = [1:11];
-                p.stimulusIndices = [1:5];
+                p.subjectIndices = obj.subjectIndices;
+                p.stimulusIndices = obj.stimulusIndices;
 
-                p.startWindows = [1];
-                p.windowStepSizes = [24 32];
-                p.lastWindows = [50];
+                p.startWindows = obj.startWindows;
+                p.windowStepSizes = obj.windowStepSizes;
+                p.lastWindows = obj.lastWindows;
 
                 % How will the index of the last window be computed?
                 p.lastWindowCalcMethod {mustBeMember(p.lastWindowCalcMethod,...
@@ -87,8 +95,9 @@ classdef ORDCalculator
                                         numel(p.startWindows), ...
                                         numel(p.windowStepSizes) ...
                                         );
-                     obj.epochs_index_metadata = ['subjectIndices',...
-                        'stimulusIndices', 'startWindows', 'windowStepSizes'];
+                     obj.epochs_index_metadata = {'subjectIndices',...
+                        'stimulusIndices', 'startWindows', 'windowStepSizes'};
+                     obj.epochs_method = method;
                      
 
                      obj.nWindows = obj.epochs;
@@ -137,9 +146,10 @@ classdef ORDCalculator
                                         numel(p.windowStepSizes), ...
                                         numel(p.lastWindows)...
                                         );
-                     obj.epochs_index_metadata = ['subjectIndices',...
+                     obj.epochs_index_metadata = {'subjectIndices',...
                         'stimulusIndices', 'startWindows', ...
-                        'windowStepSizes', 'lastWindows'];
+                        'windowStepSizes', 'lastWindows'};
+                     obj.epochs_method = method;
 
                      obj.nWindows = obj.epochs;
                      obj.K_stages = obj.epochs;
@@ -184,8 +194,9 @@ classdef ORDCalculator
                                          numel(p.stimulusIndices), ...
                                          numel(p.startWindows), ...
                                          numel(p.K_stages));
-                     obj.epochs_index_metadata = ['subjectIndices',...
-                        'stimulusIndices', 'startWindows','K_stages'];
+                     obj.epochs_index_metadata = {'subjectIndices',...
+                        'stimulusIndices', 'startWindows','K_stages'};
+                     obj.epochs_method = method;
 
                      obj.nWindows = obj.epochs;
 
@@ -225,9 +236,10 @@ classdef ORDCalculator
                                          numel(p.startWindows), ...
                                          numel(p.windowStepSizes));
 
-                     obj.epochs_index_metadata = ['subjectIndices',...
+                     obj.epochs_index_metadata = {'subjectIndices',...
                         'stimulusIndices', 'startWindows',...
-                        'windowStepSizes'];
+                        'windowStepSizes'};
+                     obj.epochs_method = method;
 
                      obj.nWindows = obj.epochs;
                      obj.K_stages = obj.epochs;
@@ -244,7 +256,7 @@ classdef ORDCalculator
                                          subject_index, ...
                                          this_firstWindow, ...
                                          this_windowStepSize) = this_firstWindow:this_windowStepSize:this_lastWindow;
-                                     
+                                    
                                      obj.nWindows(stimulus_index, ...
                                          subject_index, ...
                                          this_firstWindow, ...
@@ -263,12 +275,14 @@ classdef ORDCalculator
                  case 'single_fixedSize_maxFromStart' % zanoteli single
                     obj.epochs = p.startWindows:p.windowStepSizes:p.lastWindows; 
                     obj.epochs_index_metadata = 'single-exam';
+                    obj.epochs_method = method;
                     obj.nWindows = numel(obj.epochs)-1;
                     obj.K_stages = obj.nWindows;
 
                  case 'single_fixedSize_fromSizeType' % chesnaye single
                     obj.epochs = ceil(linspace(p.startWindows,p.lastWindows,p.K_stages));
                     obj.epochs_index_metadata = 'single-exam';
+                    obj.epochs_method = method;
                     obj.nWindows = p.K_stages;
                     obj.K_stages = p.K_stages;
 
@@ -359,27 +373,217 @@ classdef ORDCalculator
                 %    declared below, including their default values.
                 p.dataloader = obj.dataloader;
                 p.channels = obj.dataloader.channels;
-
-                p.startWindow = obj.startWindow;
-                p.windowStepSize = obj.windowStepSize;
-                p.lastWindow = obj.lastWindow;
+                p.nChannels = numel(obj.dataloader.channels);
 
                 % parameters for exam reload (should this be here?)
                 p.selectedZanoteliSubjects = obj.dataloader.selectedZanoteliSubjects;
-                p.selectedZanoteliStimuli = obj.dataloader.selectedZanoteliStimuli;
-
-                % 
-                p.K_stages
-                p.epochCalcMethod  {mustBeMember(p.epochCalcMethod,...
-                                    {'zanoteli','chesnaye'})}  = 'zanoteli'
-                
+                p.selectedZanoteliStimuli = obj.dataloader.selectedZanoteliStimuli; 
+                p.epochs = obj.epochs;
                                 
             end
 
             % obj.parameterizedMSC
-            obj.groupMSC = cell(numel(p.selectedZanoteliStimuli), ...
-                                    numel(p.selectedZanoteliSubjects));
+            obj.groupMSC = cell(size(p.epochs));
 
+            switch method
+                 case 'bulk_fixedSize_maxFromStart' % zanoteli bulk
+                     % User expects all windows to be equally sized. 
+                     % User input is subjects, stimuli, stepSizes and startWindows
+                     % other params will be ignored
+
+                     % This is not quite right cell indexing allocation but
+                     % works on MATLAB... fix later! TODO
+                     obj.epochs = cell(numel(p.subjectIndices), ...
+                                        numel(p.stimulusIndices), ...
+                                        numel(p.startWindows), ...
+                                        numel(p.windowStepSizes) ...
+                                        );
+                     obj.epochs_index_metadata = {'subjectIndices',...
+                        'stimulusIndices', 'startWindows', 'windowStepSizes'};
+                     obj.epochs_method = method;
+                     
+
+                     obj.nWindows = obj.epochs;
+                     obj.K_stages = obj.epochs;
+
+                     for stimulus_index = p.stimulusIndices
+                         for subject_index = p.subjectIndices
+                             this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
+                             this_lastWindow = size(this_exam, 2);
+
+                             for this_startWindow = p.startWindows
+                                 for this_windowStepSize = p.windowStepSizes
+                                       
+                                     obj.epochs{stimulus_index, ...
+                                         subject_index, ...
+                                         this_startWindow, ...
+                                         this_windowStepSize} = this_startWindow:this_windowStepSize:this_lastWindow;
+                                     
+                                     obj.nWindows{stimulus_index, ...
+                                         subject_index, ...
+                                         this_startWindow, ...
+                                         this_windowStepSize} = numel(obj.epochs)-1;
+
+                                     obj.K_stages{stimulus_index, ...
+                                         subject_index, ...
+                                         this_startWindow, ...
+                                         this_windowStepSize} = obj.nWindows(stimulus_index, ...
+                                                                             subject_index, ...
+                                                                             this_startWindow, ...
+                                                                             this_windowStepSize);
+                                end
+                             end
+
+                         end
+                     end
+
+                 case 'bulk_fixedSize_maxFromLast' % inverted zanoteli
+                     % User expects all windows to be equally sized. 
+                     % User input is subjects, stimuli, stepSizes and lastWindows
+                     % User may pass startWindows
+                     % other params will be ignored
+
+                     obj.epochs = cell(numel(p.subjectIndices), ...
+                                        numel(p.stimulusIndices), ...
+                                        numel(p.startWindows), ...
+                                        numel(p.windowStepSizes), ...
+                                        numel(p.lastWindows)...
+                                        );
+                     obj.epochs_index_metadata = {'subjectIndices',...
+                        'stimulusIndices', 'startWindows', ...
+                        'windowStepSizes', 'lastWindows'};
+                     obj.epochs_method = method;
+
+                     obj.nWindows = obj.epochs;
+                     obj.K_stages = obj.epochs;
+
+                     for stimulus_index = p.stimulusIndices
+                         for subject_index = p.subjectIndices
+                             for this_firstWindow = p.startWindows
+                                 for this_windowStepSize = p.windowStepSizes
+                                    for this_lastWindow = p.lastWindows
+                                 
+                                         obj.epochs(stimulus_index, ...
+                                             subject_index, ...
+                                             this_firstWindow, ...
+                                             this_windowStepSize, ...
+                                             this_lastWindow) = flip(p.this_lastWindow:-p.windowStepSize:this_firstWindow);
+                                         
+                                         obj.nWindows(stimulus_index, ...
+                                             subject_index, ...
+                                             this_firstWindow, ...
+                                             this_windowStepSize, ...
+                                             this_lastWindow) = numel(obj.epochs)-1;
+
+                                         obj.K_stages(stimulus_index, ...
+                                             subject_index, ...
+                                             this_firstWindow, ...
+                                             this_windowStepSize, ...
+                                             this_lastWindow) = p.nWindows;
+                                    end
+                                 end
+                             end
+                         end
+                     end
+
+                 case 'bulk_fixedSize_exactK' % chesnaye bulk published
+                     % Requires 1 or more first windows and Ks
+                     % User expects exactly K windows, starting at defined point 
+                     % User input is subjects, stimuli and K
+                     % User may pass startWindows
+                     % other params will be ignored
+
+                     obj.epochs = cell(numel(p.subjectIndices), ...
+                                         numel(p.stimulusIndices), ...
+                                         numel(p.startWindows), ...
+                                         numel(p.K_stages));
+                     obj.epochs_index_metadata = {'subjectIndices',...
+                        'stimulusIndices', 'startWindows','K_stages'};
+                     obj.epochs_method = method;
+
+                     obj.nWindows = obj.epochs;
+
+                     for stimulus_index = p.stimulusIndices
+                         for subject_index = p.subjectIndices
+                             this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
+                             this_lastWindow = size(this_exam, 2);
+                             
+                             for this_firstWindow = p.startWindows %!
+                                 for this_K = p.K_stages
+                                     obj.epochs(stimulus_index, ...
+                                         subject_index, ...
+                                         this_firstWindow, ...
+                                         this_K) = ceil(linspace(this_firstWindow,this_lastWindow,this_K));
+                                     
+                                     obj.nWindows(stimulus_index, ...
+                                         subject_index, ...
+                                         this_firstWindow, ...
+                                         this_K) = this_K;
+
+                                     obj.K_stages(stimulus_index, ...
+                                         subject_index, ...
+                                         this_firstWindow, ...
+                                         this_K) = this_K;
+                                 end
+                             end
+                         end
+                     end
+
+                 case 'bulk_fizedSize_fromSizeType' % chesnaye bulk max tests
+                     % User expects all windows to be equally sized. 
+                     % User input is subjects, stimuli and stepSizes
+                     % User may pass startWindows
+                     % other params will be ignored
+                     obj.epochs = cell(numel(p.subjectIndices), ...
+                                         numel(p.stimulusIndices), ...
+                                         numel(p.startWindows), ...
+                                         numel(p.windowStepSizes));
+
+                     obj.epochs_index_metadata = {'subjectIndices',...
+                        'stimulusIndices', 'startWindows',...
+                        'windowStepSizes'};
+                     obj.epochs_method = method;
+
+                     obj.nWindows = obj.epochs;
+                     obj.K_stages = obj.epochs;
+
+                     for stimulus_index = p.stimulusIndices
+                         for subject_index = p.subjectIndices
+                             this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));    
+                             this_lastWindow = size(this_exam, 2);
+    
+                             for this_firstWindow = p.startWindows %!    
+                                 for this_windowStepSize = p.windowStepSizes
+
+                                     obj.epochs(stimulus_index, ...
+                                         subject_index, ...
+                                         this_firstWindow, ...
+                                         this_windowStepSize) = this_firstWindow:this_windowStepSize:this_lastWindow;
+                                    
+                                     obj.nWindows(stimulus_index, ...
+                                         subject_index, ...
+                                         this_firstWindow, ...
+                                         this_windowStepSize) = numel(obj.epochs)-1;
+
+                                     obj.K_stages(stimulus_index, ...
+                                         subject_index, ...
+                                         this_firstWindow, ...
+                                         this_windowStepSize) = p.nWindows;
+                                 end
+                             end
+                         end
+                     end
+
+
+                 case 'single_fixedSize_maxFromStart' % zanoteli single
+                    %
+
+                 case 'single_fixedSize_fromSizeType' % chesnaye single
+                    %
+
+                 otherwise
+                     error('This sizeType-lastWindowCalcMethod method pair was not implemented yet.')
+             end
             
         end
 
