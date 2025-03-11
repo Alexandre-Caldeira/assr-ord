@@ -7,10 +7,10 @@ dtl = DataLoader('exp');
 %% Test pipeline
 % Define size of vector with randomly selected exams
 % and randomly select subjects and stimuli without replacement
-% nSubj = 5;
-% nStim = 3;
-% dtl.selectedZanoteliSubjects = randperm(numel(dtl.zanoteliSubjects),nSubj);
-% dtl.selectedZanoteliStimuli = randperm(numel(dtl.zanoteliStimulusNames),nStim);
+nSubj = 5;
+nStim = 3;
+dtl.selectedZanoteliSubjects = randperm(numel(dtl.zanoteliSubjects),nSubj);
+dtl.selectedZanoteliStimuli = randperm(numel(dtl.zanoteliStimulusNames)-1,nStim); % -1 to remove 'ESP'
 
 % Or choose all
 % nSubj = 11;

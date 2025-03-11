@@ -62,10 +62,17 @@ classdef ORDCalculator
                 p.K
                 p.nWindows
              end
+
+             % Make single to bulk switch automatic (may reconsider later,
+             % bad practice...!) TODO
+             if numel(p.startWindows) > 1
+                 p.single_or_bulk = 'bulk';
+             end
             
              method = [p.single_or_bulk,'_',p.sizeType,'_',p.lastWindowCalcMethod];
+
              switch method
-                 case 'bulk_fixedSize_maxFromStart'
+                 case 'bulk_fixedSize_maxFromStart' % zanoteli bulk
                      % This is not quite right indexing allocation but
                      % works on MATLAB... fix later! TODO
                      obj.epochs = cell(numel(p.subjectIndices),numel(p.stimulusIndices));
@@ -74,17 +81,19 @@ classdef ORDCalculator
 
                      for stimulus_index = p.stimulusIndices
                          for subject_index = p.subjectIndices
-                             this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
-                             this_lastWindow = size(this_exam, 2);
-
-                             obj.epochs(stimulus_index,subject_index) = p.startWindow:p.windowStepSize:this_lastWindow;
-                             
-                             obj.nWindows(stimulus_index,subject_index) = numel(obj.epochs)-1;
-                             obj.K(stimulus_index,subject_index) = p.nWindows;
+                             for this_startWindow = p.startWindows
+                                 this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
+                                 this_lastWindow = size(this_exam, 2);
+    
+                                 obj.epochs(stimulus_index,subject_index) = this_startWindow:p.windowStepSize:this_lastWindow;
+                                 
+                                 obj.nWindows(stimulus_index,subject_index) = numel(obj.epochs)-1;
+                                 obj.K(stimulus_index,subject_index) = p.nWindows;
+                             end
                          end
                      end
 
-                 case 'bulk_fixedSize_maxFromLast'
+                 case 'bulk_fixedSize_maxFromLast' % inverted zanoteli
                      obj.epochs = cell(numel(p.subjectIndices),numel(p.stimulusIndices));
                      obj.nWindows = obj.epochs;
                      obj.K = obj.epochs;
@@ -100,7 +109,7 @@ classdef ORDCalculator
                          end
                      end
 
-                 case 'bulk_fixedSize_exactK'
+                 case 'bulk_fixedSize_exactK' % chesnaye bulk published
                      exactK = p.K;
 
                      obj.epochs = cell(numel(p.subjectIndices),numel(p.stimulusIndices));
@@ -109,7 +118,25 @@ classdef ORDCalculator
 
                      for stimulus_index = p.stimulusIndices
                          for subject_index = p.subjectIndices
+                             for this_firstWindow = p.startWindows
+                                 this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
+                                 this_lastWindow = size(this_exam, 2);
+    
+                                 obj.epochs(stimulus_index,subject_index) = ceil(linspace(this_firstWindow,this_lastWindow,p.K));
+                                 
+                                 obj.nWindows(stimulus_index,subject_index) = exactK;
+                                 obj.K(stimulus_index,subject_index) = exactK;
+                             end
+                         end
+                     end
 
+                 case 'bulk_fizedSize_fromSizeType' % chesnaye bulk max tests
+                     obj.epochs = cell(numel(p.subjectIndices),numel(p.stimulusIndices));
+                     obj.nWindows = obj.epochs;
+                     obj.K = obj.epochs;
+
+                     for stimulus_index = p.stimulusIndices
+                         for subject_index = p.subjectIndices
                              % Use user-defined first window, 
                              if isa(p.startWindows,'cell')
                                  this_firstWindow = cell2mat(p.startWindows(stimulus_index,subject_index));
@@ -120,24 +147,7 @@ classdef ORDCalculator
                              this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
                              this_lastWindow = size(this_exam, 2);
 
-                             obj.epochs(stimulus_index,subject_index) = ceil(linspace(this_firstWindow,this_lastWindow,p.K));
-                             
-                             obj.nWindows(stimulus_index,subject_index) = exactK;
-                             obj.K(stimulus_index,subject_index) = exactK;
-                         end
-                     end
-
-                 case 'bulk_fizedSize_fromSizeType'
-                     obj.epochs = cell(numel(p.subjectIndices),numel(p.stimulusIndices));
-                     obj.nWindows = obj.epochs;
-                     obj.K = obj.epochs;
-
-                     for stimulus_index = p.stimulusIndices
-                         for subject_index = p.subjectIndices
-                             this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
-                             this_lastWindow = size(this_exam, 2);
-
-                             obj.epochs(stimulus_index,subject_index) = p.startWindow:p.windowStepSize:this_lastWindow;
+                             obj.epochs(stimulus_index,subject_index) = this_firstWindow:p.windowStepSize:this_lastWindow;
                              
                              obj.nWindows(stimulus_index,subject_index) = numel(obj.epochs)-1;
                              obj.K(stimulus_index,subject_index) = p.nWindows;
@@ -149,12 +159,12 @@ classdef ORDCalculator
                      % p.nWindows = numel(obj.epochs)-1;
                      % p.K = p.nWindows;
 
-                 case 'single_fixedSize_maxFromStart'
+                 case 'single_fixedSize_maxFromStart' % zanoteli single
                     obj.epochs = p.startWindow:p.windowStepSize:p.lastWindow;   
                     obj.nWindows = numel(obj.epochs)-1;
                     obj.K = p.nWindows;
 
-                 case 'single_fixedSize_fromSizeType'
+                 case 'single_fixedSize_fromSizeType' % chesnaye bulk
                     obj.epochs = ceil(linspace(p.startWindow,p.lastWindow,p.K));
                     obj.nWindows = p.K;
 
