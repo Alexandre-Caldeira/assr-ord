@@ -3,50 +3,42 @@ clearvars;
 close all; 
 clc;
 
-%% Test pipeline
+% Get random exam 
+[random_stimulus,random_subject,...
+    random_electrode,random_epoch] = random_exam_args(DataLoader('exp'));
+
+% Force 70dB for testsing with 50 seconds
+% random_stimulus = 1;
+% random_epoch = 35;
+
 % Load object with default exam and reset data
-dtl = DataLoader('exp');
+dtl = DataLoader('exp').resetExam(random_subject, random_stimulus);
 
-% Define size of vector with randomly selected exams
-% and randomly select subjects and stimuli without replacement
-% nSubj = 5;
-% nStim = 3;
-% dtl.selectedZanoteliSubjects = randperm(numel(dtl.zanoteliSubjects),nSubj);
-% dtl.selectedZanoteliStimuli = randperm(numel(dtl.zanoteliStimulusNames),nStim);
-
-% Or choose all
-% nSubj = 11;
-% nStim = 5;
-% dtl.selectedZanoteliSubjects = 1:numel(dtl.zanoteliSubjects);
-% dtl.selectedZanoteliStimuli = 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
-
-% Load data and compute FFT
-% dtl = dtl.loadBulkEEGData(); %.computeBulkFFTs();
+% Show random exam details on terminal
 dtl.inspectExam()
 
 % Preprocess and filter all data
 ppc = PreProcessor().zanoteliPreProcessing(dtl).antunesFiltering(dtl);
 
-% Reset SIGNALS to filtered for display
+% Reset SIGNALS to filteredSIGNALS
 dtl.signals = ppc.filteredSignals;
-% dtl.groupSignals = ppc.groupFilteredSignals;
-% dtl = dtl.computeBulkFFTs();
 dtl = dtl.computeFFT();
+
+%% Test pipeline
 
 % Compute objective response detector (MSC)
 ordc = ORDCalculator(dtl);
-ordc = ordc.compute_msc(startWindow=4, windowStepSize=15);
-
+ordc = ordc.compute_msc( ...
+                startWindow=25, ...
+                windowStepSize=32 ...
+                );
 
 %% Show results
 % Show object
 dtl.age()
 disp(ordc)
 
-filtered_freq_ord = ordc.latestMSC;
-
 lead_name = dtl.zanoteliLeads(random_electrode);
-random_epoch = random_epoch+2; % add 2 seconds removed during preprocessing
 
 exam = figure(3);
 xlabel('Frequency [Hz]')

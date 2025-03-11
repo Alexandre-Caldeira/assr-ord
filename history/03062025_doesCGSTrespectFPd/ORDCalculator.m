@@ -1,8 +1,11 @@
 classdef ORDCalculator
     properties
         dataloader
-        latestMSC
+
         MSC
+        groupMSC
+        latestMSC
+        multiParamMSC
 
         % Calculator Parameters
         startWindow
@@ -36,14 +39,11 @@ classdef ORDCalculator
                 %    declared below, including their default values.
                 p.dataloader = obj.dataloader;
                 p.channels = obj.dataloader.channels;
+                p.nChannels = numel(obj.dataloader.channels);
 
                 p.startWindow = obj.startWindow;
                 p.windowStepSize = obj.windowStepSize;
                 p.lastWindow = obj.lastWindow;
-
-                % parameters for exam reload (should this be here?)
-                p.selectedZanoteliSubjects
-                p.selectedZanoteliStimuli
 
                 % epochCalcMethod define how
                 p.epochCalcMethod  {mustBeMember(p.epochCalcMethod,...
@@ -55,7 +55,8 @@ classdef ORDCalculator
             switch p.epochCalcMethod
                 case 'zanoteli'
                     obj.epochs = p.startWindow:p.windowStepSize:p.lastWindow;
-                    p.nWindows = numel(obj.epochs);
+                    p.nWindows = numel(obj.epochs)-1;
+                    p.K = p.nWindows;
 
                 case 'chesnaye'    
                     obj.epochs = ceil(linspace(p.startWindow,p.lastWindow,p.K));
@@ -64,19 +65,51 @@ classdef ORDCalculator
             end
 
             Y  = obj.dataloader.SIGNALS;            
-            obj.MSC = zeros([obj.dataloader.nBins, nWindows, p.nChannels]);
+            obj.MSC = zeros([obj.dataloader.nBins, p.nWindows, p.nChannels]);
 
             for channel = p.channels
-                for epoch_index = 1:nWindows-1
+                for epoch_index = 1:p.nWindows
                     epochStart = obj.epochs(epoch_index);
                     epochEnd = obj.epochs(epoch_index+1)-1;
                     current_epoch = squeeze(Y(:,epochStart:epochEnd,channel));
                     
-                    obj = obj.zanotelli_msc_fft(current_epoch, obj.windowStepSize);
-                    obj.MSC(:, window_index, channel) = obj.latestMSC;
+                    obj = obj.zanotelli_msc_fft(current_epoch, p.windowStepSize);
+                    obj.MSC(:, epoch_index, channel) = obj.latestMSC;
                 end
             end
 
+        end
+
+        function obj = bulk_compute_msc(obj,p)
+            arguments
+                obj % The ORDCalculator class
+
+                % p: additional parameters, passed as Name-Value arguments
+                %    declared below, including their default values.
+                p.dataloader = obj.dataloader;
+                p.channels = obj.dataloader.channels;
+
+                p.startWindow = obj.startWindow;
+                p.windowStepSize = obj.windowStepSize;
+                p.lastWindow = obj.lastWindow;
+
+                % parameters for exam reload (should this be here?)
+                p.selectedZanoteliSubjects = obj.dataloader.selectedZanoteliSubjects;
+                p.selectedZanoteliStimuli = obj.dataloader.selectedZanoteliStimuli;
+
+                % 
+                p.K
+                p.epochCalcMethod  {mustBeMember(p.epochCalcMethod,...
+                                    {'zanoteli','chesnaye'})}  = 'zanoteli'
+                
+                                
+            end
+
+            % obj.parameterizedMSC
+            obj.groupMSC = cell(numel(p.selectedZanoteliStimuli), ...
+                                    numel(p.selectedZanoteliSubjects));
+
+            
         end
 
         function obj = compute_msc_on_all_channels(obj,varargin)
