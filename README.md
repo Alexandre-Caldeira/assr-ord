@@ -30,10 +30,10 @@ This unified MATLAB application:
 - v0.2: [07 03 2025 16:42]
     > Preprocessing functional for exp and sim, signal recompute added
 
-- v0.3: [] 
+- v0.3: [11 03 2025 21:51] 
     > MSC calculator now accepts variable parameters
 
-- v0.4: [] 
+- v0.4: [(sim tests were skipped for now)] 
     > ORD calculator functional for exp and sim
 
 - v0.5: [] 
