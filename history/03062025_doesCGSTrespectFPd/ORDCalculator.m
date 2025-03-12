@@ -5,7 +5,7 @@ classdef ORDCalculator
         MSC
         groupMSC
         latestMSC
-        multiParamMSC
+        % multiParamMSC
 
         % Calculator Parameters
         startWindow

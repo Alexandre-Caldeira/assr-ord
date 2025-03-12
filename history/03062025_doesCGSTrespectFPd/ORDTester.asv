@@ -1,0 +1,44 @@
+classdef ORDTester 
+    properties
+        
+
+        % Test Parameters     
+        NDC 
+        desired_alpha
+        
+
+        % Exam/ORD data
+        epochs = []
+        epochs_index_metadata
+        epochs_method
+        K_stages    % total number of tests to be applied on the ORD
+        nWindows    % number of Windows (may match K, or not)
+
+        subjectIndices = [1:11];
+        stimulusIndices = [1:5];
+
+        startWindows = [1];
+        windowStepSizes = [24 32];
+        lastWindows = [50];
+
+        % (bad practice, fix later)
+        dataloader
+        ord_calculator
+
+        % Utils
+        timer   % obj timer
+        id      % obj id
+    end
+
+
+    methods
+        function obj = ORDTester(obj,ord_calculator,p)
+            arguments
+                p.dataloader
+            end
+
+
+        end
+
+    end
+end
