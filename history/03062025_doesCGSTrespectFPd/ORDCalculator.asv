@@ -14,8 +14,16 @@ classdef ORDCalculator
         
         epochs = []
         epochs_index_metadata
+        epochs_method
         K_stages    % total number of tests to be applied on the ORD
         nWindows    % number of Windows (may match K, or not)
+
+        subjectIndices = [1:11];
+        stimulusIndices = [1:5];
+
+        startWindows = [1];
+        windowStepSizes = [24 32];
+        lastWindows = [50];
 
         % Utils
         timer   % obj timer
@@ -45,12 +53,12 @@ classdef ORDCalculator
                 p.channels = obj.dataloader.channels;
                 p.nChannels = numel(obj.dataloader.channels);
 
-                p.subjectIndices = [1:11];
-                p.stimulusIndices = [1:5];
+                p.subjectIndices = obj.subjectIndices;
+                p.stimulusIndices = obj.stimulusIndices;
 
-                p.startWindows = [1];
-                p.windowStepSizes = [24 32];
-                p.lastWindows = [50];
+                p.startWindows = obj.startWindows;
+                p.windowStepSizes = obj.windowStepSizes;
+                p.lastWindows = obj.lastWindows;
 
                 % How will the index of the last window be computed?
                 p.lastWindowCalcMethod {mustBeMember(p.lastWindowCalcMethod,...
@@ -71,7 +79,10 @@ classdef ORDCalculator
              if numel(p.startWindows) > 1
                  p.single_or_bulk = 'bulk';
              end
-            
+
+             obj.subjectIndices = p.subjectIndices;
+             obj.stimulusIndices = p.stimulusIndices;
+
              method = [p.single_or_bulk,'_',p.sizeType,'_',p.lastWindowCalcMethod];
 
              switch method
@@ -87,8 +98,9 @@ classdef ORDCalculator
                                         numel(p.startWindows), ...
                                         numel(p.windowStepSizes) ...
                                         );
-                     obj.epochs_index_metadata = ['subjectIndices',...
-                        'stimulusIndices', 'startWindows', 'windowStepSizes'];
+                     obj.epochs_index_metadata = {'subjectIndices',...
+                        'stimulusIndices', 'startWindows', 'windowStepSizes'};
+                     obj.epochs_method = method;
                      
 
                      obj.nWindows = obj.epochs;
@@ -101,16 +113,18 @@ classdef ORDCalculator
 
                              for this_startWindow = p.startWindows
                                  for this_windowStepSize = p.windowStepSizes
+
+                                     this_epoch = this_startWindow:this_windowStepSize:this_lastWindow;
                                        
                                      obj.epochs{stimulus_index, ...
                                          subject_index, ...
                                          this_startWindow, ...
-                                         this_windowStepSize} = this_startWindow:this_windowStepSize:this_lastWindow;
+                                         this_windowStepSize} = this_epoch;
                                      
                                      obj.nWindows{stimulus_index, ...
                                          subject_index, ...
                                          this_startWindow, ...
-                                         this_windowStepSize} = numel(obj.epochs)-1;
+                                         this_windowStepSize} = numel(this_epoch)-1;
 
                                      obj.K_stages{stimulus_index, ...
                                          subject_index, ...
@@ -137,9 +151,10 @@ classdef ORDCalculator
                                         numel(p.windowStepSizes), ...
                                         numel(p.lastWindows)...
                                         );
-                     obj.epochs_index_metadata = ['subjectIndices',...
+                     obj.epochs_index_metadata = {'subjectIndices',...
                         'stimulusIndices', 'startWindows', ...
-                        'windowStepSizes', 'lastWindows'];
+                        'windowStepSizes', 'lastWindows'};
+                     obj.epochs_method = method;
 
                      obj.nWindows = obj.epochs;
                      obj.K_stages = obj.epochs;
@@ -149,24 +164,25 @@ classdef ORDCalculator
                              for this_firstWindow = p.startWindows
                                  for this_windowStepSize = p.windowStepSizes
                                     for this_lastWindow = p.lastWindows
+                                        this_epoch = flip(p.this_lastWindow:-p.windowStepSize:this_firstWindow);
                                  
-                                         obj.epochs(stimulus_index, ...
+                                         obj.epochs{stimulus_index, ...
                                              subject_index, ...
                                              this_firstWindow, ...
                                              this_windowStepSize, ...
-                                             this_lastWindow) = flip(p.this_lastWindow:-p.windowStepSize:this_firstWindow);
+                                             this_lastWindow} = this_epoch;
                                          
-                                         obj.nWindows(stimulus_index, ...
+                                         obj.nWindows{stimulus_index, ...
                                              subject_index, ...
                                              this_firstWindow, ...
                                              this_windowStepSize, ...
-                                             this_lastWindow) = numel(obj.epochs)-1;
+                                             this_lastWindow) = numel(this_epoch)-1;
 
-                                         obj.K_stages(stimulus_index, ...
+                                         obj.K_stages{stimulus_index, ...
                                              subject_index, ...
                                              this_firstWindow, ...
                                              this_windowStepSize, ...
-                                             this_lastWindow) = p.nWindows;
+                                             this_lastWindow} = p.nWindows;
                                     end
                                  end
                              end
@@ -184,8 +200,9 @@ classdef ORDCalculator
                                          numel(p.stimulusIndices), ...
                                          numel(p.startWindows), ...
                                          numel(p.K_stages));
-                     obj.epochs_index_metadata = ['subjectIndices',...
-                        'stimulusIndices', 'startWindows','K_stages'];
+                     obj.epochs_index_metadata = {'subjectIndices',...
+                        'stimulusIndices', 'startWindows','K_stages'};
+                     obj.epochs_method = method;
 
                      obj.nWindows = obj.epochs;
 
@@ -196,20 +213,21 @@ classdef ORDCalculator
                              
                              for this_firstWindow = p.startWindows %!
                                  for this_K = p.K_stages
-                                     obj.epochs(stimulus_index, ...
-                                         subject_index, ...
-                                         this_firstWindow, ...
-                                         this_K) = ceil(linspace(this_firstWindow,this_lastWindow,this_K));
                                      
-                                     obj.nWindows(stimulus_index, ...
+                                     obj.epochs{stimulus_index, ...
                                          subject_index, ...
                                          this_firstWindow, ...
-                                         this_K) = this_K;
+                                         this_K} = ceil(linspace(this_firstWindow,this_lastWindow,this_K));
+                                     
+                                     obj.nWindows{stimulus_index, ...
+                                         subject_index, ...
+                                         this_firstWindow, ...
+                                         this_K} = this_K;
 
-                                     obj.K_stages(stimulus_index, ...
+                                     obj.K_stages{stimulus_index, ...
                                          subject_index, ...
                                          this_firstWindow, ...
-                                         this_K) = this_K;
+                                         this_K} = this_K;
                                  end
                              end
                          end
@@ -225,9 +243,10 @@ classdef ORDCalculator
                                          numel(p.startWindows), ...
                                          numel(p.windowStepSizes));
 
-                     obj.epochs_index_metadata = ['subjectIndices',...
+                     obj.epochs_index_metadata = {'subjectIndices',...
                         'stimulusIndices', 'startWindows',...
-                        'windowStepSizes'];
+                        'windowStepSizes'};
+                     obj.epochs_method = method;
 
                      obj.nWindows = obj.epochs;
                      obj.K_stages = obj.epochs;
@@ -240,20 +259,22 @@ classdef ORDCalculator
                              for this_firstWindow = p.startWindows %!    
                                  for this_windowStepSize = p.windowStepSizes
 
-                                     obj.epochs(stimulus_index, ...
-                                         subject_index, ...
-                                         this_firstWindow, ...
-                                         this_windowStepSize) = this_firstWindow:this_windowStepSize:this_lastWindow;
-                                     
-                                     obj.nWindows(stimulus_index, ...
-                                         subject_index, ...
-                                         this_firstWindow, ...
-                                         this_windowStepSize) = numel(obj.epochs)-1;
+                                     this_epoch = this_firstWindow:this_windowStepSize:this_lastWindow;
 
-                                     obj.K_stages(stimulus_index, ...
+                                     obj.epochs{stimulus_index, ...
                                          subject_index, ...
                                          this_firstWindow, ...
-                                         this_windowStepSize) = p.nWindows;
+                                         this_windowStepSize} = this_epoch;
+                                    
+                                     obj.nWindows{stimulus_index, ...
+                                         subject_index, ...
+                                         this_firstWindow, ...
+                                         this_windowStepSize} = numel(this_epoch)-1;
+
+                                     obj.K_stages{stimulus_index, ...
+                                         subject_index, ...
+                                         this_firstWindow, ...
+                                         this_windowStepSize} = p.nWindows;
                                  end
                              end
                          end
@@ -263,12 +284,14 @@ classdef ORDCalculator
                  case 'single_fixedSize_maxFromStart' % zanoteli single
                     obj.epochs = p.startWindows:p.windowStepSizes:p.lastWindows; 
                     obj.epochs_index_metadata = 'single-exam';
+                    obj.epochs_method = method;
                     obj.nWindows = numel(obj.epochs)-1;
                     obj.K_stages = obj.nWindows;
 
                  case 'single_fixedSize_fromSizeType' % chesnaye single
                     obj.epochs = ceil(linspace(p.startWindows,p.lastWindows,p.K_stages));
                     obj.epochs_index_metadata = 'single-exam';
+                    obj.epochs_method = method;
                     obj.nWindows = p.K_stages;
                     obj.K_stages = p.K_stages;
 
@@ -291,11 +314,13 @@ classdef ORDCalculator
                 p.startWindow = obj.startWindow;
                 p.windowStepSize = obj.windowStepSize;
                 p.lastWindow = obj.lastWindow;
+                
                 p.epochs = obj.epochs;
 
                 % epochCalcMethod define how
                 p.epochCalcMethod  {mustBeMember(p.epochCalcMethod,...
                                     {'zanoteli','chesnaye'})}  = 'zanoteli'
+                p.nWindows = obj.nWindows;
                 p.K_stages = obj.K_stages;
                                 
             end
@@ -327,22 +352,29 @@ classdef ORDCalculator
                 
                 p.nWindows = obj.nWindows;
                 p.K_stages = obj.K_stages;
-            else
 
-                p.nWindows = obj.nWindows;
-                p.K_stages = obj.K_stages;
             end
             
-            Y  = obj.dataloader.SIGNALS;            
-            obj.MSC = zeros([obj.dataloader.nBins, obj.nWindows, p.nChannels]);
+            % IS THIS THE CORRECT/BEST PRACTICE ACCESS??
+            Y  = p.dataloader.SIGNALS;           
+            obj.MSC = zeros([p.dataloader.nBins, p.nWindows, p.nChannels]);
 
             for channel = p.channels
                 for epoch_index = 1:p.nWindows
-                    epochStart = obj.epochs(epoch_index);
-                    epochEnd = obj.epochs(epoch_index+1)-1;
+                    epochStart = p.epochs(epoch_index);
+                    % if epoch_index+1 > p.nWindows
+                    %     disp('aqui')
+                    % end
+
+                    epochEnd = p.epochs(epoch_index+1)-1;
+                    this_windowStepSize = epochEnd - epochStart+1;
+
+                    if epochEnd > size(Y,2)
+                        disp('aqui')
+                    end
                     current_epoch = squeeze(Y(:,epochStart:epochEnd,channel));
                     
-                    obj = obj.zanotelli_msc_fft(current_epoch, p.windowStepSize);
+                    obj = obj.zanotelli_msc_fft(current_epoch, this_windowStepSize);
                     obj.MSC(:, epoch_index, channel) = obj.latestMSC;
                 end
             end
@@ -359,28 +391,51 @@ classdef ORDCalculator
                 %    declared below, including their default values.
                 p.dataloader = obj.dataloader;
                 p.channels = obj.dataloader.channels;
-
-                p.startWindow = obj.startWindow;
-                p.windowStepSize = obj.windowStepSize;
-                p.lastWindow = obj.lastWindow;
+                p.nChannels = numel(obj.dataloader.channels);
 
                 % parameters for exam reload (should this be here?)
-                p.selectedZanoteliSubjects = obj.dataloader.selectedZanoteliSubjects;
-                p.selectedZanoteliStimuli = obj.dataloader.selectedZanoteliStimuli;
-
-                % 
-                p.K_stages
-                p.epochCalcMethod  {mustBeMember(p.epochCalcMethod,...
-                                    {'zanoteli','chesnaye'})}  = 'zanoteli'
-                
+                p.subjectIndices = obj.subjectIndices;
+                p.stimulusIndices = obj.stimulusIndices; 
+                p.epochs = obj.epochs;
                                 
             end
 
             % obj.parameterizedMSC
-            obj.groupMSC = cell(numel(p.selectedZanoteliStimuli), ...
-                                    numel(p.selectedZanoteliSubjects));
+            obj.groupMSC = cell(size(p.epochs));
 
-            
+           for stimulusIndex = p.stimulusIndices
+                for subjectIndex = p.subjectIndices
+                    selected_epochs = p.epochs(stimulusIndex, subjectIndex,:);
+
+                    for params_idx = 1:numel(selected_epochs)
+                        if ~isempty(cell2mat(selected_epochs(params_idx)))
+
+                            current_epoch = cell2mat(selected_epochs(params_idx));
+
+                            epoch_idx = sub2ind(size(obj.epochs), ...
+                                stimulusIndex, subjectIndex, params_idx );
+
+                            p.nWindows = cell2mat(obj.nWindows(epoch_idx));
+
+                            p.dataloader.SIGNALS = cell2mat(p.dataloader.groupSIGNALS(stimulusIndex,subjectIndex));
+                            p.dataloader.nBins = size(p.dataloader.SIGNALS, 1);
+
+                            obj = obj.compute_msc( ...
+                                    dataloader = p.dataloader,...    
+                                    channels = p.channels,...
+                                    nChannels = p.nChannels, ...
+                                    nWindows = p.nWindows, ...
+                                    epochs = current_epoch ...
+                                    );
+
+                            obj.groupMSC{epoch_idx} = obj.MSC;
+
+
+                        end 
+                    end
+                end
+           end
+
         end
 
         function obj = compute_msc_on_all_channels(obj,varargin)
