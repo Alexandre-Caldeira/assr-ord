@@ -3,7 +3,30 @@ classdef ORDTester
         % Test Parameters     
         NDC 
         desired_alpha
+        stageAlphas 
+        stageGammas 
         
+        groupStageAlphas % stageAlphas{stimulus,subject,epoch} -> stageAlphas(K)
+        groupStageGammas % groupStageGammas{stimulus,subject,epoch} -> stageGammas(K)
+
+        signalFrequencies = [82    84    86    88    90    92    94    96];
+        noiseFrequencies = [];
+        allTestFrequencies
+        nTestFrequencies
+        noiseMask
+        noiseFlag
+        
+        
+        % Stores frequency spectrum  from all selected subjects and stimuli
+        groupMSC     % stimulus-subject-indexed cell: 
+                     % groupORD{stimulus,subject} -> ORD(frequency,test_stage,channel)
+
+        testDetectionThresholds
+        testStoppingThresholds
+        
+        % Outputs
+        decisions
+        time
 
         % Exam/ORD data
         epochs = []
@@ -19,6 +42,7 @@ classdef ORDTester
         startWindows = [1];
         windowStepSizes = [24 32];
         lastWindows = [50];
+        
 
         % (bad practice, fix later)
         dataloader
@@ -45,6 +69,7 @@ classdef ORDTester
             obj.timer = tic;
             obj.id = [num2str(keyHash(obj.timer))];
             obj.ord_calculator = ord_calculator;
+            obj.desired_alpha = p.desired_alpha;
 
             if isempty(p.K_stages)
                 p.K_stages = ord_calculator.K_stages;
@@ -56,12 +81,97 @@ classdef ORDTester
                 obj.dataloader = p.dataloader;
             end
 
+            obj.groupMSC = obj.ord_calculator.groupMSC;
+
+            obj.signalFrequencies = obj.dataloader.signalFrequencies;
+            obj.noiseFrequencies = obj.dataloader.noiseFrequencies;
+            
+            obj.allTestFrequencies = [obj.signalFrequencies, obj.noiseFrequencies];
+            obj.nTestFrequencies = numel(obj.allTestFrequencies);
+            obj.noiseFlag = numel(obj.signalFrequencies)+1; 
+            obj.noiseMask = 1:obj.nTestFrequencies > obj.noiseFlag;
+
+            obj.epochs = obj.ord_calculator.epochs;
+            obj.epochs_index_metadata = obj.ord_calculator.epochs_index_metadata;
+            obj.epochs_method = obj.ord_calculator.epochs_method;
+            obj.K_stages    = obj.ord_calculator.K_stages;
+            obj.nWindows    = obj.ord_calculator.nWindows;          
+
         end
 
         function obj = compute_beta_cgst_thresholds(obj)
             warning('Test pending')
 
+            obj.groupStageAlphas = cell(size(obj.epochs));
+            obj.groupStageGammas = cell(size(obj.epochs));
+
+            for stimulusIndex = obj.stimulusIndices
+                for subjectIndex = obj.subjectIndices
+                    selected_epochs = obj.epochs(stimulusIndex, subjectIndex,:);
+
+                    for params_idx = 1:numel(selected_epochs)
+                        if ~isempty(cell2mat(selected_epochs(params_idx)))
+
+                            epoch_idx = sub2ind(size(obj.epochs), ...
+                                stimulusIndex, subjectIndex, params_idx );
+
+                            p.nWindows = cell2mat(obj.nWindows(epoch_idx));
+                            p.K_stages = cell2mat(obj.K_stages(epoch_idx));
+                            
+                            M = p.nWindows;
+                            K = p.K_stages;
+                            
+                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            
+                            obj.groupStageAlphas{epoch_idx} = obj.stageAlphas;
+                            obj.groupStageGammas{epoch_idx} = obj.stageGammas;
+
+                        end
+                    end
+                end
+            end
+        end
+
+        function obj = single_exam_beta_cgst_threshold(obj,M,K)
+
+            TotalAlpha      = obj.desired_alpha;                        
+            Alpha_k         = ones(1,K)*(TotalAlpha/K);     
+            Gamma_k         = ((1-TotalAlpha)/K).*ones(1,K);
             
+            Resolution      = (1/0.0001);                  
+            Xvalues         = 0:1/Resolution:3;            
+            Null         	= betapdf(Xvalues, 1, M-1); %normpdf(Xvalues,muk1,sigmak1);% normpdf(Xvalues,0,0.05); %normpdf(Xvalues,0.05,0.3); %betapdf(Xvalues, 1, M-1); 
+            Null            = Null/sum(Null);             	
+            Beta_Norm       = Null/sum(Null);             	
+            k               = 1;                            
+            aThresholds(k)	= 1 - Alpha_k(k).^(1./(M-1));  % quantile(betarandn(1,1e5), 1-Alpha_k(1)); %
+            gThresholds(k)	= 1-(1- Gamma_k(k)).^(1./(M-1)); % quantile(randn(1,1e5), Gamma_k(1));
+            TruncInd_Ra     = round(aThresholds(k)*Resolution);                                         
+            TruncInd_Rg     = round(gThresholds(k)*Resolution);           
+            
+            for k = 2:K
+                % disp(k)
+                NullTrunc                   = Null;                                                     
+                NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));              
+                NullTrunc(1:TruncInd_Rg)    = zeros(1, length(NullTrunc(1:TruncInd_Rg)));
+                Null2                       = conv(Beta_Norm, NullTrunc);                              
+                Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
+                TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k));            
+                aThresholds(k)              = TruncInd_Ra/Resolution;                                    
+                TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
+                gThresholds(k)              = TruncInd_Rg/Resolution;
+                Null                        = Null2;
+            end
+
+            obj.stageAlphas = aThresholds;
+            obj.stageGammas = gThresholds;
+        end
+
+        function obj = compute_beta_cgst_decisions(obj)
+            warning('Test pending')
+            % for channel=1:params.nChannels
+            % for freq = params.testFrequencies
+            % for stage = 1:params.TotalStages
 
         end
 

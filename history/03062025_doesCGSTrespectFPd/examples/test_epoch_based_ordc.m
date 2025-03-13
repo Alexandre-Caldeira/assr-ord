@@ -36,7 +36,8 @@ filtered_freq_sample = dtl.SIGNALS(:,random_epoch,random_electrode);
 
 ordc = ORDCalculator(dtl);
 % ordc = ordc.compute_msc_on_all_channels();
-ordc = ordc.compute_msc(channels = random_electrode);
+ordc = ordc.compute_msc(channels = random_electrode, ...
+    K_stages=3);
 
 filtered_freq_ord = ordc.latestMSC;
 

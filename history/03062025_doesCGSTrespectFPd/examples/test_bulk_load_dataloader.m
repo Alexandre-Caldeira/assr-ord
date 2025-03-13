@@ -1,6 +1,6 @@
 %% Clear workspace and initialize parameters
 clearvars; 
-close all; 
+% close all; 
 clc;
 
 %% Test pipeline
@@ -24,11 +24,11 @@ dtl.selectedZanoteliStimuli = 1:numel(dtl.zanoteliStimulusNames);
 dtl = dtl.loadBulkEEGData(); %.computeBulkFFTs();
 
 % Preprocess and filter all data
-ppc = PreProcessor().bulkZanoteliPreprocess(dtl); %.bulkAntunesFilter(dtl);
+ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
 
 % Reset SIGNALS to filtered for display
-dtl.groupSignals = ppc.groupProcessedSignals;
-% dtl.groupSignals = ppc.groupFilteredSignals;
+% dtl.groupSignals = ppc.groupProcessedSignals;
+dtl.groupSignals = ppc.groupFilteredSignals;
 dtl = dtl.computeBulkFFTs();
 
 %% Show results
