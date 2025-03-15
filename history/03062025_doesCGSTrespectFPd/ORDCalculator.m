@@ -70,8 +70,8 @@ classdef ORDCalculator
                 
                 % Are epochs for a single ORD or bulk ORDs?
                 p.single_or_bulk {mustBeMember(p.single_or_bulk,{'single', 'bulk'})} = 'single'
-                p.K_stages
-                p.nWindows
+                p.K_stages = obj.K_stages;
+                p.nWindows = obj.nWindows;
              end
 
              % Make single to bulk switch automatic (may reconsider later,
@@ -351,9 +351,9 @@ classdef ORDCalculator
                 obj = obj.fit_epochs( ...
                     lastWindowCalcMethod=p.lastWindowCalcMethod, ...
                     sizeType = p.sizeType, ...
-                    startWindows = obj.startWindow, ...
-                    windowStepSizes = obj.windowStepSize,...
-                    lastWindows = obj.lastWindow,...
+                    startWindows = p.startWindow, ...
+                    windowStepSizes = p.windowStepSize,...
+                    lastWindows = p.lastWindow,...
                     K_stages = p.K_stages...
                     );
                 
@@ -370,16 +370,10 @@ classdef ORDCalculator
             for channel = p.channels
                 for epoch_index = 1:p.nWindows-1
                     epochStart = p.epochs(epoch_index);
-                    % if epoch_index+1 > p.nWindows
-                    %     disp('aqui')
-                    % end
 
                     epochEnd = p.epochs(epoch_index+1)-1;
                     this_windowStepSize = epochEnd - epochStart+1;
 
-                    if epochEnd > size(Y,2)
-                        disp('aqui')
-                    end
                     current_epoch = squeeze(Y(:,epochStart:epochEnd,channel));
                     
                     obj = obj.zanotelli_msc_fft(current_epoch, this_windowStepSize);

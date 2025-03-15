@@ -5,6 +5,18 @@ classdef ORDTester
         desired_alpha
         stageAlphas 
         stageGammas 
+        TP
+        TN
+        FP
+        FN
+
+        groupTP
+        groupTN
+        groupFP
+        groupFN
+
+        lastExam
+
         
         groupStageAlphas % stageAlphas{stimulus,subject,epoch} -> stageAlphas(K)
         groupStageGammas % groupStageGammas{stimulus,subject,epoch} -> stageGammas(K)
@@ -25,6 +37,7 @@ classdef ORDTester
         testStoppingThresholds
         
         % Outputs
+        groupDecisions
         decisions
         time
 
@@ -86,7 +99,7 @@ classdef ORDTester
             obj.signalFrequencies = obj.dataloader.signalFrequencies;
             obj.noiseFrequencies = obj.dataloader.noiseFrequencies;
             
-            obj.allTestFrequencies = [obj.signalFrequencies, obj.noiseFrequencies];
+            obj.allTestFrequencies = [obj.signalFrequencies, sort(obj.noiseFrequencies)];
             obj.nTestFrequencies = numel(obj.allTestFrequencies);
             obj.noiseFlag = numel(obj.signalFrequencies)+1; 
             obj.noiseMask = 1:obj.nTestFrequencies > obj.noiseFlag;
@@ -133,45 +146,203 @@ classdef ORDTester
         end
 
         function obj = single_exam_beta_cgst_threshold(obj,M,K)
-
-            TotalAlpha      = obj.desired_alpha;                        
-            Alpha_k         = ones(1,K)*(TotalAlpha/K);     
-            Gamma_k         = ((1-TotalAlpha)/K).*ones(1,K);
             
-            Resolution      = (1/0.0001);                  
-            Xvalues         = 0:1/Resolution:3;            
-            Null         	= betapdf(Xvalues, 1, M-1); %normpdf(Xvalues,muk1,sigmak1);% normpdf(Xvalues,0,0.05); %normpdf(Xvalues,0.05,0.3); %betapdf(Xvalues, 1, M-1); 
-            Null            = Null/sum(Null);             	
-            Beta_Norm       = Null/sum(Null);             	
-            k               = 1;                            
-            aThresholds(k)	= 1 - Alpha_k(k).^(1./(M-1));  % quantile(betarandn(1,1e5), 1-Alpha_k(1)); %
-            gThresholds(k)	= 1-(1- Gamma_k(k)).^(1./(M-1)); % quantile(randn(1,1e5), Gamma_k(1));
-            TruncInd_Ra     = round(aThresholds(k)*Resolution);                                         
-            TruncInd_Rg     = round(gThresholds(k)*Resolution);           
+            alpha      = obj.desired_alpha;                        
+
+            Alpha_k         = ones(1,K)*(alpha/K);    
+            Gamma_k = ((1-alpha)/K).*ones(1,K);
+            Resolution      = (1/0.00001); %(1/0.0001);                 
+            Xvalues         = 0:1/Resolution:1;            
+            Null         	= betapdf(Xvalues, 1, M-1);
+            Null            = Null/sum(Null);            
+            Chi2_Norm       = Null/sum(Null);             
+         
+            k               = 1;                           
+            aThresholds(k)	= 1 - Alpha_k(k).^(1./(M-1));  
+            gThresholds(k)	= 1-(1- Gamma_k(k)).^(1./(M-1));
+            TruncInd_Ra      = round(aThresholds(k)*Resolution);
+            TruncInd_Rg      = round(gThresholds(k)*Resolution);           
             
             for k = 2:K
-                % disp(k)
-                NullTrunc                   = Null;                                                     
-                NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));              
+                NullTrunc                   = Null;                                                
+                NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));    
                 NullTrunc(1:TruncInd_Rg)    = zeros(1, length(NullTrunc(1:TruncInd_Rg)));
-                Null2                       = conv(Beta_Norm, NullTrunc);                              
+                
+                Null2                       = conv(Chi2_Norm, NullTrunc);   
                 Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
-                TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k));            
-                aThresholds(k)              = TruncInd_Ra/Resolution;                                    
+        
+                TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k)); 
+                aThresholds(k)              = TruncInd_Ra/Resolution;  
                 TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
                 gThresholds(k)              = TruncInd_Rg/Resolution;
-                Null                        = Null2;
-            end
+                Null                        = Null2; 
+            end   
+
 
             obj.stageAlphas = aThresholds;
             obj.stageGammas = gThresholds;
         end
 
-        function obj = compute_beta_cgst_decisions(obj)
+        function [p,obj]  = validateDetectionThresholds(obj, p)
+            arguments
+                obj
+
+                p.dataloader
+                p.K_stages = 5
+                p.SNRmean = 5
+                p.SNRvar = 0.01
+                p.duration = 50
+            end
+
+
+            p.dataloader = DataLoader('sim').resetSNRfun(p.SNRmean, p.SNRvar);
+            p.dataloader = p.dataloader.genSimulatedSignals(duration = p.duration);
+
+            p.ord_calculator = ORDCalculator(p.dataloader.computeFFT());
+            p.ord_calculator = p.ord_calculator.compute_msc( ...
+                K_stages= p.K_stages, ...
+                epochCalcMethod='chesnaye', ...
+                startWindow=1);
+
+            p.epochs = p.ord_calculator.epochs;
+            obj.decisions = zeros(size(p.ord_calculator.MSC));
+            p.allTestFrequencies = [p.dataloader.signalFrequencies, ...
+                sort(p.dataloader.noiseFrequencies)];
+
+            M = p.epochs(end)-p.epochs(end-1)+1;
+            obj = obj.single_exam_beta_cgst_threshold(M, p.K_stages);
+            obj = obj.compute_beta_cgst_decisions( ...
+                allTestFrequencies=p.allTestFrequencies, ...
+                ord_calculator=p.ord_calculator);
+        end
+    
+        function obj = compute_bulk_beta_cgst_decisions(obj,p)
+            arguments
+                obj % The ORDCalculator class
+
+                % p: additional parameters, passed as Name-Value arguments
+                %    declared below, including their default values.
+                p.dataloader = obj.dataloader;
+                p.channels = obj.dataloader.channels;
+                p.nChannels = numel(obj.dataloader.channels);
+
+                % parameters for exam reload (should this be here?)
+                p.subjectIndices = obj.ord_calculator.subjectIndices;
+                p.stimulusIndices = obj.ord_calculator.stimulusIndices; 
+                p.epochs = obj.ord_calculator.epochs;
+                                
+            end
             warning('Test pending')
-            % for channel=1:params.nChannels
-            % for freq = params.testFrequencies
-            % for stage = 1:params.TotalStages
+            % obj.parameterizedMSC
+            obj.groupDecisions = cell(size(p.epochs));
+
+           for stimulusIndex = p.stimulusIndices
+                for subjectIndex = p.subjectIndices
+                    selected_epochs = p.epochs(stimulusIndex, subjectIndex,:);
+
+                    for params_idx = 1:numel(selected_epochs)
+                        if ~isempty(cell2mat(selected_epochs(params_idx)))
+
+                            current_epoch = cell2mat(selected_epochs(params_idx));
+
+                            epoch_idx = sub2ind(size(obj.epochs), ...
+                                stimulusIndex, subjectIndex, params_idx );
+
+                            p.nWindows = cell2mat(obj.nWindows(epoch_idx));
+                            p.K_stages = cell2mat(obj.K_stages(epoch_idx));
+
+                            obj.ord_calculator.MSC = cell2mat( ...
+                                obj.ord_calculator.groupMSC(stimulusIndex,subjectIndex,params_idx));
+      
+                            M = current_epoch(end) - current_epoch(end-1)+1;
+                            K = p.K_stages;
+                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            obj = obj.compute_beta_cgst_decisions();
+
+                            obj.groupDecisions{epoch_idx} = obj.decisions;
+                            obj.groupTP{epoch_idx} = obj.TP;
+                            obj.groupTN{epoch_idx} = obj.TN;
+                            obj.groupFP{epoch_idx} = obj.FP;
+                            obj.groupFN{epoch_idx} = obj.FN;
+
+                        end 
+                    end
+                end
+           end
+        end
+
+        function obj = compute_beta_cgst_decisions(obj, p)
+            arguments
+                obj
+
+                p.channels = obj.dataloader.channels
+                p.allTestFrequencies = obj.allTestFrequencies
+                p.ord_calculator = obj.ord_calculator
+                p.noiseFlag = obj.noiseFlag
+            end
+
+            current_tests = p.ord_calculator.MSC;
+            % current_decisions = zeros(size(current_tests));
+            obj.lastExam = current_tests;%zeros(size(current_tests));
+
+            % TP = zeros(Kmax,numel(freq_bins));
+
+            obj.TP = zeros(size(obj.lastExam));
+            obj.FP = zeros(size(obj.lastExam));
+            obj.TN = zeros(size(obj.lastExam));
+            obj.FN = zeros(size(obj.lastExam));
+            
+            % TN = zeros(Kmax,numel(freq_bins));
+            % FN = zeros(Kmax,numel(freq_bins));
+
+            for channel=p.channels
+                for freq = p.allTestFrequencies
+                    % obj.lastExam(freq,:,channel) = current_tests(freq,:,channel);
+                    for k = 1:size(current_tests,2)
+                        
+        
+                        % SIGNAL
+                        if freq < p.allTestFrequencies(p.noiseFlag) && ...                         % not noise
+                            sum(obj.lastExam(freq,1:k,channel)) > obj.stageAlphas(k)    % detected
+                
+                            % obj.decisions(freq,k,channel) = obj.decisions(freq,k,channel) +1;
+                            obj.TP(freq,k,channel) = obj.TP(freq,k,channel)+1;
+                            % t_decisao(k,freq) = ~sum(t_decisao(:,freq),'all');
+                    
+                        elseif freq < p.allTestFrequencies(p.noiseFlag) && ...                     % not noise
+                                sum(obj.lastExam(freq,1:k,channel)) <= obj.stageGammas(k)% gave up 
+                
+                            % obj.decisions(freq,k,channel)  = obj.decisions(freq,k,channel) -1;
+                            obj.FN(freq,k,channel) = obj.FN(freq,k,channel)+1;
+                            % t_decisao(k,freq) = -1*(~sum(t_decisao(:,freq),'all'));
+                
+                        % NOISE
+                        elseif freq >= p.allTestFrequencies(p.noiseFlag) && ...                    % is noise
+                                sum(obj.lastExam(freq,1:k,channel)) > obj.stageAlphas(k)       % detected
+                
+                            obj.decisions(freq,k,channel)  = obj.decisions(freq,k,channel) -1;
+                            obj.FP(freq,k,channel) = obj.FP(freq,k,channel)+1;
+                            % t_decisao(k,freq) = ~sum(t_decisao(:,freq),'all');
+                            
+                        elseif freq >= p.allTestFrequencies(p.noiseFlag) && ...                    % is noise
+                                sum(obj.lastExam(freq,1:k,channel)) <= obj.stageGammas(k)       % gave up
+                
+                            % obj.decisions(freq,k,channel)  = obj.decisions(freq,k,channel) +1;
+                            obj.TN(freq,k,channel) = obj.TN(freq,k,channel)+1;
+                            % t_decisao(k,freq) = -1*(~sum(t_decisao(:,freq),'all'));
+
+                        else
+                            if k==size(current_tests,2)
+
+                                warning('neither detection nor stop')
+                            end
+                            
+                        end
+                
+                    end
+                end
+            end
+            % obj.decisions = FP;
 
         end
 
@@ -191,5 +362,50 @@ classdef ORDTester
         end
 
 
+    end
+
+    methods(Static)
+        function Ind = findIndex(PDF1, Goal, GetFutil)         % GetFutil = 1 if futility
+            L               = length(PDF1);
+            increment       = round(0.05*L);
+            Pos             = round(L/2);
+            S               = sum(PDF1(1:Pos));
+            increasing      = true;
+            if S>Goal
+                increasing  = false;
+            end
+            if abs(sum(PDF1(1:1))) >= Goal
+                increment   = 0;
+                Pos         = 0;
+            end
+            if sum(PDF1) <= Goal
+                increment   = 0;
+                if GetFutil
+                    Pos	= 0;        % futility threshold
+                else
+                    Pos = L;        % efficacy threshold
+                end
+            end
+            while increment>1
+                if increasing
+                    Pos = Pos+increment;
+                else
+                    Pos = Pos-increment;
+                end
+                S = sum(PDF1(1:Pos));
+                if increasing
+                    if S > Goal
+                        increment = floor(increment/2);
+                        increasing = false;
+                    end
+                else
+                    if S < Goal
+                        increment = floor(increment/2);
+                        increasing = true;
+                    end
+                end
+            end
+            Ind = Pos;
+        end
     end
 end

@@ -207,7 +207,11 @@ classdef DataLoader
 
         end
 
-        function obj = genSimulatedSignals(obj) 
+        function obj = genSimulatedSignals(obj,p)
+            arguments
+                obj
+                p.duration = obj.duration
+            end
             % genSimulatedSignals generates simulated EEG signals (noise + sinusoidal signal). 
             % Example test usage:
             % dtl = DataLoader('sim');
@@ -218,7 +222,7 @@ classdef DataLoader
             % 'MarkerEdgeColor','red')
 
             obj.nChannels = numel(obj.channels);
-            obj.totalSamples = obj.fs * obj.duration * obj.nChannels; 
+            obj.totalSamples = obj.fs * p.duration * obj.nChannels; 
             t = (0:obj.totalSamples-1) / obj.fs;     
         
             obj.signals = 0;
@@ -230,9 +234,9 @@ classdef DataLoader
                 obj.signals = obj.signals+sin(2*pi*fo*t);
             end
            
-            obj.signals = reshape(obj.signals, [obj.fs, obj.duration, obj.nChannels]);  
+            obj.signals = reshape(obj.signals, [obj.fs, p.duration, obj.nChannels]);  
             for channel = 1:obj.nChannels
-                for epoch = 1:obj.duration
+                for epoch = 1:p.duration
 
                     x = awgn( ... % add white gaussian noise
                             obj.signals(:,epoch,channel), ... % to this section of signal
@@ -303,6 +307,7 @@ classdef DataLoader
             end
 
             obj.duration = newDuration;
+            obj.signals = obj.signals(:,1:obj.duration,:);
             obj = obj.computeFFT();
             
         end

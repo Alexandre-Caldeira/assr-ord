@@ -5,7 +5,7 @@ clc
 
 % parameters
 K               = 5;                            % analyse data 3 times
-TotalAlpha      = 0.01;                         % pre-specified alpha-level for the full sequential test
+TotalAlpha      = 0.10;                         % pre-specified alpha-level for the full sequential test
 Alpha_k         = ones(1,K)*(TotalAlpha/K);     % alpha to spend at each stage
 Gamma_k         = [0.1, 0.15, 0.2, 0.25, 0.29]; % ...!
 Resolution      = (1/0.0001);                   % the resolution of the approximated distribution of the test statistic
