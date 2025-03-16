@@ -31,6 +31,8 @@ classdef DataLoader
         % For MC Simulation        
         noiseMean = -10
         noiseStd = 1
+        groupNoiseMean = [0 -15 -30]
+        groupNoiseStd  = [1   1   1]
         SNRfun
 
         % For ASSR EEG Data
@@ -154,58 +156,7 @@ classdef DataLoader
                     obj.groupSignals{stimulusIndex,subjectIndex} = obj.signals;
                 end
             end
-        end
-
-        function obj = computeBulkFFTs(obj)
-            obj.groupSIGNALS = cell(numel(obj.selectedZanoteliStimuli), ...
-                                    numel(obj.selectedZanoteliSubjects));
-            
-            for stimulusIndex = obj.selectedZanoteliStimuli
-                for subjectIndex = obj.selectedZanoteliSubjects
-
-                    % Reset signal and parameters
-                    obj.signals = cell2mat(obj.groupSignals(stimulusIndex,subjectIndex));
-                    obj.fs = size(obj.signals, 1);
-                    obj.nfft = obj.fs;
-                    obj.nBins = floor(obj.fs/2)+1;
-                    obj.zanoteliStimulusIndex = stimulusIndex;
-                    obj.zanoteliSubjectIndex = subjectIndex;
-
-                    obj = obj.computeFFT();
-                    obj.groupSIGNALS{stimulusIndex,subjectIndex} = obj.SIGNALS;
-                end
-            end
-        end
-
-        function inspectExam(obj)
-            fprintf(...
-            '\n\tExam is %s stimulus on subject %s,\n\t measuring on %s for %s seconds.\n\n', ...
-                cell2mat(obj.zanoteliStimulusNames(obj.zanoteliStimulusIndex)), ...
-                cell2mat(obj.zanoteliSubjects(obj.zanoteliSubjectIndex,:)),...
-                cell2mat(obj.zanoteliLeads(1)),...
-                num2str(size(obj.signals, 2))...
-                )
-        end
-
-        function obj =resetSNRfun(obj,noiseMean,noiseStd)
-            % Alguns exemplos:
-            % noise_var_mean = 2^2;
-            % noise_var = @() (noise_var_mean+ sqrt(noise_var_var)*randn(1));
-            % noise_sd = @() randi([1,45],1)/10;
-
-            % Test case:
-            % dtl = DataLoader('sim');
-            % vec = zeros(1,1e5);
-            % for i = 1:numel(vec)
-            % vec(i) = dtl.SNRfun();
-            % end
-            % histogram(vec)
-
-            obj.noiseMean = noiseMean;
-            obj.noiseStd = noiseStd;
-            obj.SNRfun = @() obj.noiseMean+obj.noiseStd()*randn(1);
-
-        end
+        end        
 
         function obj = genSimulatedSignals(obj,p)
             arguments
@@ -249,6 +200,33 @@ classdef DataLoader
 
         end
 
+        function obj = genBulkSim(obj,p)
+            arguments
+                obj
+
+                p.groupNoiseMean = obj.groupNoiseMean
+                p.groupNoiseStd  = obj.groupNoiseStd
+
+            end
+
+            obj.groupSignals = cell(numel(p.groupNoiseMean), numel(p.groupNoiseStd));
+            
+            for noiseMean_idx = 1:numel(p.groupNoiseMean)
+                for noiseVar_idx = 1:numel(p.groupNoiseStd)
+                    current_noiseMean = p.groupNoiseMean(noiseMean_idx);
+                    current_noiseVar = p.groupNoiseStd(noiseVar_idx);
+
+                    obj = obj.resetSNRfun(current_noiseMean, current_noiseVar);
+                    obj = obj.genSimulatedSignals();
+
+                    obj.groupSignals{noiseMean_idx,noiseVar_idx} = obj.signals;
+
+                end
+            end
+            obj.groupNoiseMean = p.groupNoiseMean;
+            obj.groupNoiseStd = p.groupNoiseStd;
+        end
+
         function obj = computeFFT(obj) 
             % computeFFT computes the FFT along each window (row-wise) and 
             % returns only the positive frequencies. 
@@ -263,6 +241,73 @@ classdef DataLoader
                     obj.SIGNALS(:,epoch,channel) = temp(1:obj.nBins); 
                 end
             end
+
+        end
+
+        function obj = computeBulkFFTs(obj,p)
+            arguments
+                obj
+                
+                p.mode = 'exp';
+            end
+
+            
+            if matches(p.mode(1:3),"sim", IgnoreCase=true)
+                for noiseMean_idx = 1:numel(obj.groupNoiseMean)
+                    for noiseVar_idx = 1:numel(obj.groupNoiseStd)
+
+                        obj.signals = cell2mat(obj.groupSignals(noiseMean_idx,noiseVar_idx));
+    
+                        obj = obj.computeFFT();
+                        obj.groupSIGNALS{noiseMean_idx,noiseVar_idx} = obj.SIGNALS;
+    
+                    end
+                end
+
+            elseif matches(obj.mode(1:3),"exp", IgnoreCase=true)
+                obj.groupSIGNALS = cell(numel(obj.selectedZanoteliStimuli), ...
+                                    numel(obj.selectedZanoteliSubjects));
+
+                for stimulusIndex = obj.selectedZanoteliStimuli
+                    for subjectIndex = obj.selectedZanoteliSubjects
+    
+                        % Reset signal and parameters
+                        obj.signals = cell2mat(obj.groupSignals(stimulusIndex,subjectIndex));
+                        obj.fs = size(obj.signals, 1);
+                        obj.nfft = obj.fs;
+                        obj.nBins = floor(obj.fs/2)+1;
+                        obj.zanoteliStimulusIndex = stimulusIndex;
+                        obj.zanoteliSubjectIndex = subjectIndex;
+    
+                        obj = obj.computeFFT();
+                        obj.groupSIGNALS{stimulusIndex,subjectIndex} = obj.SIGNALS;
+                    end
+                end
+
+            else
+                % Throw error
+                error('DataLoader mode input is invalid.'); 
+            end
+            
+        end
+
+        function obj =resetSNRfun(obj,noiseMean,noiseStd)
+            % Alguns exemplos:
+            % noise_var_mean = 2^2;
+            % noise_var = @() (noise_var_mean+ sqrt(noise_var_var)*randn(1));
+            % noise_sd = @() randi([1,45],1)/10;
+
+            % Test case:
+            % dtl = DataLoader('sim');
+            % vec = zeros(1,1e5);
+            % for i = 1:numel(vec)
+            % vec(i) = dtl.SNRfun();
+            % end
+            % histogram(vec)
+
+            obj.noiseMean = noiseMean;
+            obj.noiseStd = noiseStd;
+            obj.SNRfun = @() obj.noiseMean+obj.noiseStd()*randn(1);
 
         end
 
@@ -312,8 +357,19 @@ classdef DataLoader
             
         end
 
+        % Utils:
         function age(obj)
             fprintf('\n\tThis DataLoader was built %0.2f seconds ago.\n\n', round(toc(obj.timer),2))
+        end
+
+        function inspectExam(obj)
+            fprintf(...
+            '\n\tExam is %s stimulus on subject %s,\n\t measuring on %s for %s seconds.\n\n', ...
+                cell2mat(obj.zanoteliStimulusNames(obj.zanoteliStimulusIndex)), ...
+                cell2mat(obj.zanoteliSubjects(obj.zanoteliSubjectIndex,:)),...
+                cell2mat(obj.zanoteliLeads(1)),...
+                num2str(size(obj.signals, 2))...
+                )
         end
 
     end

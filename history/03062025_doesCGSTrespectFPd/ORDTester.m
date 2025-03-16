@@ -147,10 +147,10 @@ classdef ORDTester
 
         function obj = single_exam_beta_cgst_threshold(obj,M,K)
             
-            alpha      = obj.desired_alpha;                        
+            alpha           = obj.desired_alpha;                        
 
             Alpha_k         = ones(1,K)*(alpha/K);    
-            Gamma_k = ((1-alpha)/K).*ones(1,K);
+            Gamma_k         = ((1-alpha)/K).*ones(1,K);
             Resolution      = (1/0.00001); %(1/0.0001);                 
             Xvalues         = 0:1/Resolution:1;            
             Null         	= betapdf(Xvalues, 1, M-1);
@@ -276,6 +276,67 @@ classdef ORDTester
            end
         end
 
+
+        function obj = compute_bulk_sim_beta_cgst_decisions(obj,p)
+            arguments
+                obj % The ORDCalculator class
+
+                % p: additional parameters, passed as Name-Value arguments
+                %    declared below, including their default values.
+                p.dataloader = obj.dataloader;
+                p.channels = obj.dataloader.channels;
+                p.nChannels = numel(obj.dataloader.channels);
+
+                % parameters for exam reload (should this be here?)
+                p.subjectIndices = obj.ord_calculator.subjectIndices;
+                p.stimulusIndices = obj.ord_calculator.stimulusIndices; 
+                p.epochs = obj.ord_calculator.epochs;
+
+                p.nWindows = obj.ord_calculator.nWindows;
+                p.K_stages = obj.ord_calculator.K_stages;
+                                
+            end
+            warning('Test pending')
+            
+            % obj.parameterizedMSC
+           obj.epochs = p.epochs;
+           obj.groupDecisions = cell(size(p.epochs));
+           obj.groupTP = cell(size(obj.groupDecisions));
+           obj.groupTN = cell(size(obj.groupDecisions));
+           obj.groupFP = cell(size(obj.groupDecisions));
+           obj.groupFN = cell(size(obj.groupDecisions));
+
+           for noiseMean_idx = 1:numel(obj.dataloader.groupNoiseMean)
+                for noiseVar_idx = 1:numel(obj.dataloader.groupNoiseStd)
+                    selected_epochs = p.epochs(noiseMean_idx, noiseVar_idx,:);
+                    
+                    for params_idx = 1:numel(selected_epochs)
+                        if ~isempty(cell2mat(selected_epochs(params_idx)))
+            
+                            current_epoch = cell2mat(selected_epochs(params_idx));
+        
+                            epoch_idx = sub2ind(size(p.epochs), ...
+                                noiseMean_idx, noiseVar_idx, params_idx );
+    
+                            obj.ord_calculator.MSC = cell2mat( ...
+                                obj.ord_calculator.groupMSC(noiseMean_idx,noiseVar_idx,params_idx));
+      
+                            M = current_epoch(end) - current_epoch(end-1)+1;
+                            K = cell2mat(p.K_stages(epoch_idx));
+                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            obj = obj.compute_beta_cgst_decisions();
+
+                            obj.groupTP{epoch_idx} = obj.TP;
+                            obj.groupTN{epoch_idx} = obj.TN;
+                            obj.groupFP{epoch_idx} = obj.FP;
+                            obj.groupFN{epoch_idx} = obj.FN;
+
+                        end 
+                    end
+                end
+           end
+        end
+        
         function obj = compute_beta_cgst_decisions(obj, p)
             arguments
                 obj
@@ -325,7 +386,6 @@ classdef ORDTester
                         elseif freq >= p.allTestFrequencies(p.noiseFlag) && ...                    % is noise
                                 sum(obj.lastExam(freq,1:k,channel)) > obj.stageAlphas(k)       % detected
                 
-                            obj.decisions(freq,k,channel)  = obj.decisions(freq,k,channel) -1;
                             obj.FP(freq,k,channel) = obj.FP(freq,k,channel)+1;
                             % t_decisao(k,freq) = ~sum(t_decisao(:,freq),'all');
                             

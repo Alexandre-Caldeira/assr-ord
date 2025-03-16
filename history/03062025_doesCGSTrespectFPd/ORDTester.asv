@@ -147,10 +147,10 @@ classdef ORDTester
 
         function obj = single_exam_beta_cgst_threshold(obj,M,K)
             
-            alpha      = obj.desired_alpha;                        
+            alpha           = obj.desired_alpha;                        
 
             Alpha_k         = ones(1,K)*(alpha/K);    
-            Gamma_k = ((1-alpha)/K).*ones(1,K);
+            Gamma_k         = ((1-alpha)/K).*ones(1,K);
             Resolution      = (1/0.00001); %(1/0.0001);                 
             Xvalues         = 0:1/Resolution:1;            
             Null         	= betapdf(Xvalues, 1, M-1);
@@ -171,9 +171,9 @@ classdef ORDTester
                 Null2                       = conv(Chi2_Norm, NullTrunc);   
                 Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
         
-                TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k)); 
+                TruncInd_Ra                 = ORDTester.findIndex(Null2, sum(Null2) - Alpha_k(k)); 
                 aThresholds(k)              = TruncInd_Ra/Resolution;  
-                TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
+                TruncInd_Rg                 = ORDTester.findIndex(Null2, Gamma_k(k), 1);
                 gThresholds(k)              = TruncInd_Rg/Resolution;
                 Null                        = Null2; 
             end   
@@ -233,8 +233,13 @@ classdef ORDTester
                                 
             end
             warning('Test pending')
+            
             % obj.parameterizedMSC
-            obj.groupDecisions = cell(size(p.epochs));
+           obj.groupDecisions = cell(size(p.epochs));
+           obj.groupTP = cell(size(p.epochs));
+           obj.groupTN = cell(size(p.epochs));
+           obj.groupFP = cell(size(p.epochs));
+           obj.groupFN = cell(size(p.epochs));
 
            for stimulusIndex = p.stimulusIndices
                 for subjectIndex = p.subjectIndices
@@ -271,6 +276,67 @@ classdef ORDTester
            end
         end
 
+
+        function obj = compute_bulk_sim_beta_cgst_decisions(obj,p)
+            arguments
+                obj % The ORDCalculator class
+
+                % p: additional parameters, passed as Name-Value arguments
+                %    declared below, including their default values.
+                p.dataloader = obj.dataloader;
+                p.channels = obj.dataloader.channels;
+                p.nChannels = numel(obj.dataloader.channels);
+
+                % parameters for exam reload (should this be here?)
+                p.subjectIndices = obj.ord_calculator.subjectIndices;
+                p.stimulusIndices = obj.ord_calculator.stimulusIndices; 
+                p.epochs = obj.ord_calculator.epochs;
+                                
+            end
+            warning('Test pending')
+            
+            % obj.parameterizedMSC
+           obj.groupDecisions = cell(size(p.groupNoiseMean));
+           obj.groupTP = cell(size(obj.groupDecisions));
+           obj.groupTN = cell(size(obj.groupDecisions));
+           obj.groupFP = cell(size(obj.groupDecisions));
+           obj.groupFN = cell(size(obj.groupDecisions));
+
+           for noiseMean_idx = 1:numel(p.groupNoiseMean)
+               for noiseVar_idx = 1:numel(p.groupNoiseStd)
+                   selected_epochs = p.epochs(stimulusIndex, subjectIndex,:);
+
+                    for params_idx = 1:numel(selected_epochs)
+                        if ~isempty(cell2mat(selected_epochs(params_idx)))
+
+                            current_epoch = cell2mat(selected_epochs(params_idx));
+
+                            epoch_idx = sub2ind(size(obj.epochs), ...
+                                stimulusIndex, subjectIndex, params_idx );
+
+                            p.nWindows = cell2mat(obj.nWindows(epoch_idx));
+                            p.K_stages = cell2mat(obj.K_stages(epoch_idx));
+
+                            obj.ord_calculator.MSC = cell2mat( ...
+                                obj.ord_calculator.groupMSC(stimulusIndex,subjectIndex,params_idx));
+      
+                            M = current_epoch(end) - current_epoch(end-1)+1;
+                            K = p.K_stages;
+                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            obj = obj.compute_beta_cgst_decisions();
+
+                            obj.groupDecisions{epoch_idx} = obj.decisions;
+                            obj.groupTP{epoch_idx} = obj.TP;
+                            obj.groupTN{epoch_idx} = obj.TN;
+                            obj.groupFP{epoch_idx} = obj.FP;
+                            obj.groupFN{epoch_idx} = obj.FN;
+
+                        end 
+                    end
+                end
+           end
+        end
+        
         function obj = compute_beta_cgst_decisions(obj, p)
             arguments
                 obj

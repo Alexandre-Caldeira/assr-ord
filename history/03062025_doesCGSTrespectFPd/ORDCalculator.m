@@ -20,6 +20,7 @@ classdef ORDCalculator
 
         subjectIndices = [1:11];
         stimulusIndices = [1:5];
+        channels
 
         startWindows = [1];
         windowStepSizes = [24 32];
@@ -209,33 +210,70 @@ classdef ORDCalculator
                      obj.epochs_method = method;
 
                      obj.nWindows = obj.epochs;
-
-                     for stimulus_index = p.stimulusIndices
-                         for subject_index = p.subjectIndices
-                             this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
-                             this_lastWindow = size(this_exam, 2);
-                             
-                             for this_firstWindow = p.startWindows %!
-                                 for this_K = p.K_stages
-                                     
-                                     obj.epochs{stimulus_index, ...
-                                         subject_index, ...
-                                         this_firstWindow, ...
-                                         this_K} = ceil(linspace(this_firstWindow,this_lastWindow,this_K));
-                                     
-                                     obj.nWindows{stimulus_index, ...
-                                         subject_index, ...
-                                         this_firstWindow, ...
-                                         this_K} = this_K;
-
-                                     obj.K_stages{stimulus_index, ...
-                                         subject_index, ...
-                                         this_firstWindow, ...
-                                         this_K} = this_K;
+                     
+                     mode = obj.dataloader.mode;
+                    if matches(mode(1:3),"sim", IgnoreCase=true)
+                        
+                        for noiseMean_idx = 1:numel(obj.dataloader.groupNoiseMean)
+                            for noiseVar_idx = 1:numel(obj.dataloader.groupNoiseStd)
+            
+                                this_exam = cell2mat(p.dataloader.groupSignals(noiseMean_idx,noiseVar_idx));
+                                this_lastWindow = size(this_exam, 2);
+                                 for this_firstWindow = p.startWindows %!
+                                     for this_K = p.K_stages
+                                         
+                                         obj.epochs{noiseMean_idx, ...
+                                             noiseVar_idx, ...
+                                             this_firstWindow, ...
+                                             this_K} = ceil(linspace(this_firstWindow,this_lastWindow,this_K));
+                                         
+                                         obj.nWindows{noiseMean_idx, ...
+                                             noiseVar_idx, ...
+                                             this_firstWindow, ...
+                                             this_K} = this_K;
+    
+                                         obj.K_stages{noiseMean_idx, ...
+                                             noiseVar_idx, ...
+                                             this_firstWindow, ...
+                                             this_K} = this_K;
+                                     end
+                                 end
+                            end
+                        end
+        
+                    elseif matches(mode(1:3),"exp", IgnoreCase=true)
+                        for stimulus_index = p.stimulusIndices
+                             for subject_index = p.subjectIndices
+                                 this_exam = cell2mat(p.dataloader.groupSignals(stimulus_index,subject_index));
+                                 this_lastWindow = size(this_exam, 2);
+                                 
+                                 for this_firstWindow = p.startWindows %!
+                                     for this_K = p.K_stages
+                                         
+                                         obj.epochs{stimulus_index, ...
+                                             subject_index, ...
+                                             this_firstWindow, ...
+                                             this_K} = ceil(linspace(this_firstWindow,this_lastWindow,this_K));
+                                         
+                                         obj.nWindows{stimulus_index, ...
+                                             subject_index, ...
+                                             this_firstWindow, ...
+                                             this_K} = this_K;
+    
+                                         obj.K_stages{stimulus_index, ...
+                                             subject_index, ...
+                                             this_firstWindow, ...
+                                             this_K} = this_K;
+                                     end
                                  end
                              end
                          end
-                     end
+        
+                    else
+                        % Throw error
+                        error('DataLoader mode input is invalid.'); 
+                    end
+
 
                  case 'bulk_fizedSize_fromSizeType' % chesnaye bulk max tests
                      % User expects all windows to be equally sized. 
@@ -401,25 +439,27 @@ classdef ORDCalculator
                 p.epochs = obj.epochs;
                                 
             end
-
-            % obj.parameterizedMSC
-            obj.groupMSC = cell(size(p.epochs));
-
-           for stimulusIndex = p.stimulusIndices
-                for subjectIndex = p.subjectIndices
-                    selected_epochs = p.epochs(stimulusIndex, subjectIndex,:);
-
-                    for params_idx = 1:numel(selected_epochs)
-                        if ~isempty(cell2mat(selected_epochs(params_idx)))
-
+            
+            mode = obj.dataloader.mode;
+            if matches(mode(1:3),"sim", IgnoreCase=true)
+                % obj.parameterizedMSC
+                obj.groupMSC = cell(size(p.epochs));
+                obj.channels = p.channels;
+                for noiseMean_idx = 1:numel(obj.dataloader.groupNoiseMean)
+                    for noiseVar_idx = 1:numel(obj.dataloader.groupNoiseStd)
+                        selected_epochs = p.epochs(noiseMean_idx, noiseVar_idx,:);
+                        
+                        for params_idx = 1:numel(selected_epochs)
+                            if ~isempty(cell2mat(selected_epochs(params_idx)))
+                
                             current_epoch = cell2mat(selected_epochs(params_idx));
 
                             epoch_idx = sub2ind(size(obj.epochs), ...
-                                stimulusIndex, subjectIndex, params_idx );
+                                noiseMean_idx, noiseVar_idx, params_idx );
 
                             p.nWindows = cell2mat(obj.nWindows(epoch_idx));
 
-                            p.dataloader.SIGNALS = cell2mat(p.dataloader.groupSIGNALS(stimulusIndex,subjectIndex));
+                            p.dataloader.SIGNALS = cell2mat(p.dataloader.groupSIGNALS(noiseMean_idx,noiseVar_idx));
                             p.dataloader.nBins = size(p.dataloader.SIGNALS, 1);
 
                             obj = obj.compute_msc( ...
@@ -433,10 +473,51 @@ classdef ORDCalculator
                             obj.groupMSC{epoch_idx} = obj.MSC;
 
 
-                        end 
+                            end 
+                        end
                     end
                 end
-           end
+
+            elseif matches(mode(1:3),"exp", IgnoreCase=true)
+                for stimulus_index = p.stimulusIndices
+    
+                    % obj.parameterizedMSC
+                    obj.groupMSC = cell(size(p.epochs));
+                    obj.channels = p.channels;
+                   for stimulusIndex = p.stimulusIndices
+                        for subjectIndex = p.subjectIndices
+                            selected_epochs = p.epochs(stimulusIndex, subjectIndex,:);
+        
+                            for params_idx = 1:numel(selected_epochs)
+                                if ~isempty(cell2mat(selected_epochs(params_idx)))
+        
+                                    current_epoch = cell2mat(selected_epochs(params_idx));
+        
+                                    epoch_idx = sub2ind(size(obj.epochs), ...
+                                        stimulusIndex, subjectIndex, params_idx );
+        
+                                    p.nWindows = cell2mat(obj.nWindows(epoch_idx));
+        
+                                    p.dataloader.SIGNALS = cell2mat(p.dataloader.groupSIGNALS(stimulusIndex,subjectIndex));
+                                    p.dataloader.nBins = size(p.dataloader.SIGNALS, 1);
+        
+                                    obj = obj.compute_msc( ...
+                                            dataloader = p.dataloader,...    
+                                            channels = p.channels,...
+                                            nChannels = p.nChannels, ...
+                                            nWindows = p.nWindows, ...
+                                            epochs = current_epoch ...
+                                            );
+        
+                                    obj.groupMSC{epoch_idx} = obj.MSC;
+        
+        
+                                end 
+                            end
+                        end
+                   end
+                end
+            end
 
         end
 

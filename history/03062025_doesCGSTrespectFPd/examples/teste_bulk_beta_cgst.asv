@@ -28,7 +28,7 @@ dtl.groupSignals = ppc.groupFilteredSignals;
 dtl = dtl.computeBulkFFTs();
 %%
 % M = 40 
-K_stages = 4;
+K_stages = [3 5 10];
 ordc = ORDCalculator(dtl).fit_epochs( ...
     stimulusIndices = dtl.selectedZanoteliStimuli,...
     subjectIndices = dtl.selectedZanoteliSubjects,...
@@ -47,8 +47,9 @@ dtl.age()
 %% Test pipeline
 % Apply TEST(s) to objective response detector (MSC)
 tester = ORDTester(ordc);
+tester.desired_alpha = 0.2;
 tester = tester.compute_bulk_beta_cgst_decisions();
-
+tester.age()
 
 %%
 % tester = tester.validateDetectionThresholds(dtl);
@@ -66,6 +67,62 @@ disp(tester)
 
 %% Show results
 
+nParams = numel(tester.epochs(1,1,:));
+nChannels = numel(tester.ord_calculator.channels);
+tester.FP = zeros(nParams,nChannels);
+tester.FN = zeros(nParams,nChannels);
+tester.TP = zeros(nParams,nChannels);
+tester.TN = zeros(nParams,nChannels);
+
+for stimulusIndex = tester.stimulusIndices
+    for subjectIndex = tester.subjectIndices
+        for channel_idx = 1:numel(tester.ord_calculator.channels)
+            for epoch_param_idx = 1:nParams 
+                exam_fp = cell2mat(tester.groupFP(stimulusIndex, subjectIndex, epoch_param_idx));
+                
+                if ~isempty(exam_fp)
+                    % If there was a detection on any stage, 
+                    % assign 1 to that exam, and repeat for all
+                    % frequencies. Then, sum all 1s.
+                    % + Add previous results from other subjs
+                    % To compute rate (pct), divide by #freqs and #subj
+
+                    exam_fn = cell2mat(tester.groupFN(stimulusIndex, subjectIndex, epoch_param_idx));
+                    exam_tp = cell2mat(tester.groupTP(stimulusIndex, subjectIndex, epoch_param_idx));
+                    exam_tn = cell2mat(tester.groupTN(stimulusIndex, subjectIndex, epoch_param_idx));
+
+                    tester.FP(epoch_param_idx, channel_idx) = ...
+                            sum(any(exam_fp(tester.noiseFrequencies,:,channel_idx)>0,2))...
+                            + tester.FP(epoch_param_idx, channel_idx);
+
+                    tester.FN(epoch_param_idx, channel_idx) = ...
+                            sum(any(exam_fp(tester.signalFrequencies,:,channel_idx)>0,2))...
+                            + tester.FP(epoch_param_idx, channel_idx);
+
+                    tester.TP(epoch_param_idx, channel_idx) = ...
+                            sum(any(exam_fp(tester.signalFrequencies,:,channel_idx)>0,2))...
+                            + tester.FP(epoch_param_idx, channel_idx);
+
+                    tester.TN(epoch_param_idx, channel_idx) = ...
+                            sum(any(exam_fp(tester.noiseFrequencies,:,channel_idx)>0,2))...
+                            + tester.FP(epoch_param_idx, channel_idx);
+    
+                end
+            end
+        end
+    end
+end
+
+
+fp_rate = tester.FP/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+
+tp_rate = tester.TP/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+
+fn_rate = tester.FN/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+
+tn_rate = tester.TN/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+
+%%
 check = tester.FP + tester.FN + tester.TP + tester.TN;
 check_tested = check(tester.allTestFrequencies,:,:);
 check_untested = check;
@@ -90,179 +147,3 @@ check_untested(tester.allTestFrequencies,:,:) = [];
 % fp_por_param = cell(1);
 % tp_por_param = cell(1);
 % fn_por_param = cell(1);
-%%
-sometempshit = cell(size(tester.groupFP));
-count = 0;
-for stimulusIndex = tester.stimulusIndices
-    for subjectIndex = tester.subjectIndices
-        selected_exams = tester.epochs(stimulusIndex,subjectIndex,:);
-        
-        for params_idx = 1:numel(selected_exams)
-        
-            if ~isempty(cell2mat(selected_exams(params_idx)))
-                count = count +1;
-                decision_group_idx = sub2ind(size(tester.groupFP), ...
-                    stimulusIndex, subjectIndex, params_idx );
-
-                % p.nWindows = cell2mat(obj.nWindows(decision_group_idx));
-                % p.K_stages = cell2mat(obj.K_stages(decision_group_idx));
-                
-                % decisao_por_exame = zeros(params.dataloader.noiseFrequencies,size(tester.FP,3));
-                decisao_por_exame = cell2mat(tester.groupTN(decision_group_idx));
-
-                % freq x channels (8x1) -> detect (1) / no (0)
-                % decisao_por_exame = squeeze(any(decisao_por_exame(tester.dataloader.noiseFrequencies,:,:)>0,2));
-                outro = squeeze(any(decisao_por_exame(tester.dataloader.noiseFrequencies,:,single_channel)>0,2));
-                
-                % % freq (8x1) -> detect(1) / no (0)
-                % decisao_por_exame = decisao_por_exame(:,single_channel); 
-
-                % # detect 
-                outro = sum(outro,'all'); 
-                sometempshit{decision_group_idx} = decisao_por_exame;
-
-                % obj = obj.single_exam_beta_cgst_threshold(M,K);
-                % 
-                % obj.groupStageAlphas{epoch_idx} = obj.stageAlphas;
-                % obj.groupStageGammas{epoch_idx} = obj.stageGammas;
-
-            end
-        end
-    end
-end
-
-
-tp_per_stimulus_per_param = cell(numel(tester.stimulusIndices),numel(selected_exams));
-
-for stimulusIndex = tester.stimulusIndices
-    for subjectIndex = tester.subjectIndices
-        selected_exams = tester.epochs(stimulusIndex,subjectIndex,:);
-        
-        for params_idx = 1:numel(selected_exams)
-        
-            if ~isempty(cell2mat(selected_exams(params_idx)))
-                
-
-                decision_group_idx = sub2ind(size(tester.groupFP), ...
-                    stimulusIndex, subjectIndex, params_idx );
-
-                % p.nWindows = cell2mat(obj.nWindows(decision_group_idx));
-                % p.K_stages = cell2mat(obj.K_stages(decision_group_idx));
-                
-                % decisao_por_exame = zeros(params.dataloader.noiseFrequencies,size(tester.FP,3));
-                decisao_por_exame = cell2mat(tester.groupTN(decision_group_idx));
-
-                % freq x channels (8x1) -> detect (1) / no (0)
-                % decisao_por_exame = squeeze(any(decisao_por_exame(tester.dataloader.noiseFrequencies,:,:)>0,2));
-                outro = squeeze(any(decisao_por_exame(tester.dataloader.noiseFrequencies,:,single_channel)>0,2));
-                
-                % % freq (8x1) -> detect(1) / no (0)
-                % decisao_por_exame = decisao_por_exame(:,single_channel); 
-
-                % # detect 
-                outro = sum(outro,'all'); 
-                tp_per_stimulus_per_param{stimulusIndex,params_idx} =ectp_per_stimulus_per_param(stimulusIndex,params_idx)+ sometempshit(decision_group_idx);
-
-            end
-        end
-    end
-end
-
-meanval = cell(size(tp_per_stimulus_per_param));
-
-for stimulusIndex = tester.stimulusIndices
-     selected_exams = tp_per_stimulus_per_param(stimulusIndex,:);
-        
-        for params_idx = 1:numel(selected_exams)
-             if ~isempty(cell2mat(selected_exams(params_idx)))
-                meanval = tp_per_stimulus_per_param(stimulusIndex,params_idx)/(8*11)
-             end
-        end
-end
-
-
-
-%%
-
-
-
-
-some_stim = ordc.stimulusIndices(end);
-some_subj = 1; % 1 - 11
-this_msc = cell2mat(ordc.groupMSC(5,5,K_stages));
-this_msc = this_msc(:,:,single_channel);
-for k=1:size(this_msc,2)
-    s1 = stem(sum(this_msc(:,1:k,1),2));
-    hold on
-    title(['Epoch = ',num2str(k)])
-    s2 = stem(tester.signalFrequencies, ...
-        sum(this_msc(tester.signalFrequencies,1:k,1),2), 'filled', 'color', 'k');
-
-    s3 = stem(tester.noiseFrequencies, ...
-        sum(this_msc(tester.noiseFrequencies,1:k,1),2), 'filled', 'color', 'r');
-
-    l1 = yline(tester.stageAlphas(k), 'g--');
-    l2 = yline(tester.stageGammas(k), 'r--');
-
-    legend('MSC', 'Signal', 'Noise', 'Detect above this', 'Stop below this')
-    grid on
-    xlim([0,501])
-    hold off
-    pause(0.66*2.2)
-end
-
-% 
-% % Show 3 exam timeseries and PSD (from random random stimulus-subject-electrode)
-% randomly_shown_subj = dtl.selectedZanoteliSubjects(randperm(nSubj,3));
-% randomly_shown_stim = dtl.selectedZanoteliStimuli(randi([1 2],1,3));
-% randomly_shown_electrode = [single_channel single_channel single_channel]; %randperm(dtl.nChannels,3)
-% 
-% % find nonempty epoch parameters
-% nonempty_params = [];
-% for i = 1:numel(ordc.epochs(dtl.selectedZanoteliStimuli(1),dtl.selectedZanoteliSubjects(1),:))
-%     if ~isempty(cell2mat(ordc.epochs(dtl.selectedZanoteliStimuli(1),dtl.selectedZanoteliSubjects(1),i)))
-%         nonempty_params = [i nonempty_params];
-%     end
-% end
-% randomly_selected_epoch_param = nonempty_params(randi([1 numel(nonempty_params)],1,3));
-% 
-% 
-% figure(1)
-% for i = 1:3
-% 
-%     current_signal = cell2mat( ...
-%         dtl.groupSignals(randomly_shown_stim(i),randomly_shown_subj(i)));
-% 
-%     current_SIGNAL =  cell2mat( ...
-%         ordc.groupMSC(randomly_shown_stim(i),randomly_shown_subj(i),randomly_selected_epoch_param(i)));
-% 
-%     random_epoch = randi([1,size(current_signal,2)],1);
-%     random_test = randi([1,size(current_SIGNAL,2)-1],1);
-% 
-%     current_signal = current_signal(:,random_epoch,randomly_shown_electrode(i));    
-%     lead_name = dtl.zanoteliLeads(randomly_shown_electrode(i));
-% 
-%     % add 2 seconds removed during preprocessing
-%     exam_time = ((random_epoch+2)*dtl.fs:(random_epoch+2)*dtl.fs+numel(current_signal)-1)';
-% 
-%     subplot(2,3,i)
-%     plot(exam_time,current_signal)
-%     grid on 
-%     xlabel('Time [ms]')
-%     ylabel('Voltage [V]')
-%     title(['Measures Aquired on' lead_name])
-% 
-%     subplot(2,3,i+3)
-%     stem(abs(current_SIGNAL(:,random_test,randomly_shown_electrode(i))), ...
-%         'filled', 'MarkerSize',3,'LineWidth',0.1)
-%     hold on
-%     stem(dtl.signalFrequencies, ...
-%         abs(current_SIGNAL(dtl.signalFrequencies,random_test,randomly_shown_electrode(i))), ...
-%         'filled', 'MarkerSize',3,'LineWidth',0.1, 'Color','red');
-%     grid on 
-%     xlabel('Frequency [Hz]')
-%     ylabel('MSC')
-%     title(['MSC computed from' lead_name])
-%     hold off
-% 
-% end
