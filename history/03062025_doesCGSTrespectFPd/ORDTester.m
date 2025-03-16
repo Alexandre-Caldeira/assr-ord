@@ -171,9 +171,9 @@ classdef ORDTester
                 Null2                       = conv(Chi2_Norm, NullTrunc);   
                 Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
         
-                TruncInd_Ra                 = findIndex(Null2, sum(Null2) - Alpha_k(k)); 
+                TruncInd_Ra                 = ORDTester.findIndex(Null2, sum(Null2) - Alpha_k(k)); 
                 aThresholds(k)              = TruncInd_Ra/Resolution;  
-                TruncInd_Rg                 = findIndex(Null2, Gamma_k(k), 1);
+                TruncInd_Rg                 = ORDTester.findIndex(Null2, Gamma_k(k), 1);
                 gThresholds(k)              = TruncInd_Rg/Resolution;
                 Null                        = Null2; 
             end   
@@ -233,8 +233,13 @@ classdef ORDTester
                                 
             end
             warning('Test pending')
+            
             % obj.parameterizedMSC
-            obj.groupDecisions = cell(size(p.epochs));
+           obj.groupDecisions = cell(size(p.epochs));
+           obj.groupTP = cell(size(p.epochs));
+           obj.groupTN = cell(size(p.epochs));
+           obj.groupFP = cell(size(p.epochs));
+           obj.groupFN = cell(size(p.epochs));
 
            for stimulusIndex = p.stimulusIndices
                 for subjectIndex = p.subjectIndices

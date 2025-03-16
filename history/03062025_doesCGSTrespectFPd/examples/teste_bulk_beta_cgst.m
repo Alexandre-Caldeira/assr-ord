@@ -28,7 +28,7 @@ dtl.groupSignals = ppc.groupFilteredSignals;
 dtl = dtl.computeBulkFFTs();
 %%
 % M = 40 
-K_stages = 3;
+K_stages = 4;
 ordc = ORDCalculator(dtl).fit_epochs( ...
     stimulusIndices = dtl.selectedZanoteliStimuli,...
     subjectIndices = dtl.selectedZanoteliSubjects,...
@@ -87,37 +87,106 @@ check_untested(tester.allTestFrequencies,:,:) = [];
 % find non-empty parameter sets
 
 
-fp_por_param = cell(1);
-tp_por_param = cell(1);
-fn_por_param = cell(1);
-tn_por_param = cell(1);
-
-for params_idx = 1:numel(selected_exams)
-for stim = tester.stimulusIndices
-    for subj = tester.subjectIndices
-        selected_exams = tester.groupDecisions(1, 1,:);
-
+% fp_por_param = cell(1);
+% tp_por_param = cell(1);
+% fn_por_param = cell(1);
+%%
+sometempshit = cell(size(tester.groupFP));
+count = 0;
+for stimulusIndex = tester.stimulusIndices
+    for subjectIndex = tester.subjectIndices
+        selected_exams = tester.epochs(stimulusIndex,subjectIndex,:);
+        
+        for params_idx = 1:numel(selected_exams)
         
             if ~isempty(cell2mat(selected_exams(params_idx)))
-
-                decision_group_idx = sub2ind(size(tester.groupDecisions), ...
+                count = count +1;
+                decision_group_idx = sub2ind(size(tester.groupFP), ...
                     stimulusIndex, subjectIndex, params_idx );
 
-                p.nWindows = cell2mat(obj.nWindows(decision_group_idx));
-                p.K_stages = cell2mat(obj.K_stages(decision_group_idx));
+                % p.nWindows = cell2mat(obj.nWindows(decision_group_idx));
+                % p.K_stages = cell2mat(obj.K_stages(decision_group_idx));
                 
-                M = p.nWindows;
-                K = p.K_stages;
+                % decisao_por_exame = zeros(params.dataloader.noiseFrequencies,size(tester.FP,3));
+                decisao_por_exame = cell2mat(tester.groupTN(decision_group_idx));
+
+                % freq x channels (8x1) -> detect (1) / no (0)
+                % decisao_por_exame = squeeze(any(decisao_por_exame(tester.dataloader.noiseFrequencies,:,:)>0,2));
+                outro = squeeze(any(decisao_por_exame(tester.dataloader.noiseFrequencies,:,single_channel)>0,2));
                 
-                obj = obj.single_exam_beta_cgst_threshold(M,K);
-                
-                obj.groupStageAlphas{epoch_idx} = obj.stageAlphas;
-                obj.groupStageGammas{epoch_idx} = obj.stageGammas;
+                % % freq (8x1) -> detect(1) / no (0)
+                % decisao_por_exame = decisao_por_exame(:,single_channel); 
+
+                % # detect 
+                outro = sum(outro,'all'); 
+                sometempshit{decision_group_idx} = outro;
+
+                % obj = obj.single_exam_beta_cgst_threshold(M,K);
+                % 
+                % obj.groupStageAlphas{epoch_idx} = obj.stageAlphas;
+                % obj.groupStageGammas{epoch_idx} = obj.stageGammas;
 
             end
         end
     end
 end
+
+
+% tp_per_stimulus_per_param = cell(numel(tester.stimulusIndices),numel(selected_exams));
+tn_per_stimulus_per_param = repmat({0},numel(tester.stimulusIndices),numel(selected_exams));
+for stimulusIndex = tester.stimulusIndices
+    for subjectIndex = tester.subjectIndices
+        selected_exams = tester.epochs(stimulusIndex,subjectIndex,:);
+        
+        for params_idx = 1:numel(selected_exams)
+        
+            if ~isempty(cell2mat(selected_exams(params_idx)))
+                
+
+                decision_group_idx = sub2ind(size(tester.groupFP), ...
+                    stimulusIndex, subjectIndex, params_idx );
+
+                % p.nWindows = cell2mat(obj.nWindows(decision_group_idx));
+                % p.K_stages = cell2mat(obj.K_stages(decision_group_idx));
+                
+                % decisao_por_exame = zeros(params.dataloader.noiseFrequencies,size(tester.FP,3));
+                decisao_por_exame = cell2mat(tester.groupTN(decision_group_idx));
+
+                % freq x channels (8x1) -> detect (1) / no (0)
+                % decisao_por_exame = squeeze(any(decisao_por_exame(tester.dataloader.noiseFrequencies,:,:)>0,2));
+                outro = squeeze(any(decisao_por_exame(tester.dataloader.noiseFrequencies,:,single_channel)>0,2));
+                
+                % % freq (8x1) -> detect(1) / no (0)
+                % decisao_por_exame = decisao_por_exame(:,single_channel); 
+
+                % # detect 
+                outro = sum(outro,'all'); 
+                tn_per_stimulus_per_param{stimulusIndex,params_idx} =...
+                    cell2mat(tn_per_stimulus_per_param(stimulusIndex,params_idx))+...
+                    cell2mat(sometempshit(decision_group_idx));
+
+            end
+        end
+    end
+end
+
+meanval = cell(size(tn_per_stimulus_per_param));
+
+for stimulusIndex = tester.stimulusIndices
+     selected_exams = tn_per_stimulus_per_param(stimulusIndex,:);
+        
+        for params_idx = 1:numel(selected_exams)
+             if ~isempty(cell2mat(selected_exams(params_idx)))
+                meanval{params_idx} = cell2mat(tn_per_stimulus_per_param(stimulusIndex,params_idx))/(8*11)
+             end
+        end
+end
+
+
+
+%%
+
+
 
 
 some_stim = ordc.stimulusIndices(end);
