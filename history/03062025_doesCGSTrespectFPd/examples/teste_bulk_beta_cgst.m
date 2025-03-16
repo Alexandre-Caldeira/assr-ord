@@ -13,7 +13,7 @@ dtl = DataLoader('exp');
 
 % Or choose all
 nSubj = 11;
-nStim = 5;
+nStim = 3; % 3 5
 dtl.selectedZanoteliSubjects = 1:numel(dtl.zanoteliSubjects);
 dtl.selectedZanoteliStimuli = 5; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
 
@@ -26,13 +26,26 @@ ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
 % dtl.groupSignals = ppc.groupProcessedSignals;
 dtl.groupSignals = ppc.groupFilteredSignals;
 dtl = dtl.computeBulkFFTs();
+
 %%
 % M = 40 
+% K_stages = [2 3 5 8 10];
+% ordc = ORDCalculator(dtl).fit_epochs( ...
+%     stimulusIndices = dtl.selectedZanoteliStimuli,...
+%     subjectIndices = dtl.selectedZanoteliSubjects,...
+%     startWindows = [1 6 10 25], ... % windowStepSizes = 52, ...
+%     K_stages = K_stages,...
+%     single_or_bulk = 'bulk',...
+%     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
+%     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
+%     ... % then, compute on selected channels:
+%     );
+
 K_stages = 5;
 ordc = ORDCalculator(dtl).fit_epochs( ...
     stimulusIndices = dtl.selectedZanoteliStimuli,...
     subjectIndices = dtl.selectedZanoteliSubjects,...
-    startWindows = 1, ... % windowStepSizes = 52, ...
+    startWindows = 10, ... % windowStepSizes = 52, ...
     K_stages = K_stages,...
     single_or_bulk = 'bulk',...
     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
@@ -47,16 +60,13 @@ dtl.age()
 %% Test pipeline
 % Apply TEST(s) to objective response detector (MSC)
 tester = ORDTester(ordc);
-tester.desired_alpha = 0.30;
+tester.desired_alpha = 0.33s;
 
 tester = tester.compute_bulk_beta_cgst_decisions();
 tester.age()
+% disp(tester)
 
-%%
-% tester = tester.validateDetectionThresholds(dtl);
-disp(tester)
-
-% Comportamento:
+% Comportamento (a implementar)
 % O que precisamos testar? Janelas! 
 % (qual limite para deteccao, quando parar, como sinalizar)
 %
@@ -66,7 +76,7 @@ disp(tester)
 % 3. paradaT (limita tempo): duração máxima do exame OU numero deamostras/janelas;
 % 4. paradaI (limita dados): NDC, futilidade/detecção-CGST, variância das amostras (SNR). 
 
-%% Show results
+% Show results
 
 nParams = numel(tester.epochs(1,1,:));
 nChannels = numel(tester.ord_calculator.channels);
@@ -115,38 +125,12 @@ for stimulusIndex = tester.stimulusIndices
 end
 
 
-fp_rate = tester.FP/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices));
+fp_rate = tester.FP/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
 
-tp_rate = tester.TP/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices));
+tp_rate = tester.TP/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
 
-fn_rate = tester.FN/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices));
+fn_rate = tester.FN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
 
-tn_rate = tester.TN/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices));
+tn_rate = tester.TN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
 
 confmat = table(fp_rate, tp_rate, fn_rate, tn_rate, 'VariableNames',{'fp','tp','fn','tn'})
-
-%%
-check = tester.FP + tester.FN + tester.TP + tester.TN;
-check_tested = check(tester.allTestFrequencies,:,:);
-check_untested = check;
-check_untested(tester.allTestFrequencies,:,:) = [];
-
-% decisao_por_exame = zeros(params.dataloader.noiseFrequencies,size(tester.FP,3));
-% fp_por_exame = squeeze(any(tester.FP(tester.dataloader.noiseFrequencies,:,:)>0,2));
-% fp_medio = 100*mean(fp_por_exame ,'all')
-% 
-% tn_por_exame = squeeze(any(tester.FP(tester.dataloader.noiseFrequencies,:,:)>0,2));
-% tn_medio = 100*mean(tn_por_exame ,'all')
-% 
-% tp_por_exame = squeeze(any(tester.TP(tester.dataloader.signalFrequencies,:,:)>0,2));
-% tp_medio = 100*mean(tp_por_exame ,'all')
-% 
-% fn_por_exame = squeeze(any(tester.FN(tester.dataloader.signalFrequencies,:,:)>0,2));
-% fn_medio = 100*mean(fn_por_exame ,'all')
-
-% find non-empty parameter sets
-
-
-% fp_por_param = cell(1);
-% tp_por_param = cell(1);
-% fn_por_param = cell(1);

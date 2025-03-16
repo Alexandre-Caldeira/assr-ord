@@ -7,12 +7,12 @@ clearvars; close all; clc;
 % tester = tester.compute_beta_cgst_thresholds();
 
 tester = ORDTester(ORDCalculator(DataLoader('sim')));
-tester.desired_alpha = 0.05;
 
-tester.dataloader = tester.dataloader.genBulkSim().computeBulkFFTs(mode='sim');
+tester.dataloader = tester.dataloader.genBulkSim( ...
+    groupNoiseMean=50, groupNoiseStd=0.1).computeBulkFFTs(mode='sim');
 tester.age()
 
-tester.ord_calculator = tester.ord_calculator.fit_epochs( ...
+tester.ord_calculator = ORDCalculator(tester.dataloader).fit_epochs( ...
     stimulusIndices = tester.dataloader.groupNoiseMean,...
     subjectIndices = tester.dataloader.groupNoiseStd,...
     startWindows = 1, ...
@@ -25,6 +25,7 @@ tester.ord_calculator = tester.ord_calculator.fit_epochs( ...
 tester.ord_calculator = tester.ord_calculator.bulk_compute_msc();
 tester.age()
 
+tester.desired_alpha = 0.05;
 tester = tester.compute_bulk_sim_beta_cgst_decisions();
 tester.age()
 
@@ -38,11 +39,11 @@ tester.FN = zeros(nParams,nChannels);
 tester.TP = zeros(nParams,nChannels);
 tester.TN = zeros(nParams,nChannels);
 
-for stimulusIndex = tester.stimulusIndices
-    for subjectIndex = tester.subjectIndices
+for noiseMean_idx = 1:numel(tester.dataloader.groupNoiseMean)
+    for noiseVar_idx = 1:numel(tester.dataloader.groupNoiseStd)
         for channel_idx = 1:numel(tester.ord_calculator.channels)
             for epoch_param_idx = 1:nParams 
-                exam_fp = cell2mat(tester.groupFP(stimulusIndex, subjectIndex, epoch_param_idx));
+                exam_fp = cell2mat(tester.groupFP(noiseMean_idx, noiseVar_idx, epoch_param_idx));
                 if ~isempty(exam_fp)
                     % If there was a detection on any stage, 
                     % assign 1 to that exam, and repeat for all
@@ -50,25 +51,25 @@ for stimulusIndex = tester.stimulusIndices
                     % + Add previous results from other subjs
                     % To compute rate (pct), divide by #freqs and #subj
 
-                    exam_fn = cell2mat(tester.groupFN(stimulusIndex, subjectIndex, epoch_param_idx));
-                    exam_tp = cell2mat(tester.groupTP(stimulusIndex, subjectIndex, epoch_param_idx));
-                    exam_tn = cell2mat(tester.groupTN(stimulusIndex, subjectIndex, epoch_param_idx));
+                    exam_fn = cell2mat(tester.groupFN(noiseMean_idx, noiseVar_idx, epoch_param_idx));
+                    exam_tp = cell2mat(tester.groupTP(noiseMean_idx, noiseVar_idx, epoch_param_idx));
+                    exam_tn = cell2mat(tester.groupTN(noiseMean_idx, noiseVar_idx, epoch_param_idx));
 
                     tester.FP(epoch_param_idx, channel_idx) = ...
                             sum(any(exam_fp(tester.noiseFrequencies,:,channel_idx)>0,2))...
                             + tester.FP(epoch_param_idx, channel_idx);
 
                     tester.FN(epoch_param_idx, channel_idx) = ...
-                            sum(any(exam_fp(tester.signalFrequencies,:,channel_idx)>0,2))...
-                            + tester.FP(epoch_param_idx, channel_idx);
+                            sum(any(exam_fn(tester.signalFrequencies,:,channel_idx)>0,2))...
+                            + tester.FN(epoch_param_idx, channel_idx);
 
                     tester.TP(epoch_param_idx, channel_idx) = ...
-                            sum(any(exam_fp(tester.signalFrequencies,:,channel_idx)>0,2))...
-                            + tester.FP(epoch_param_idx, channel_idx);
+                            sum(any(exam_tp(tester.signalFrequencies,:,channel_idx)>0,2))...
+                            + tester.TP(epoch_param_idx, channel_idx);
 
                     tester.TN(epoch_param_idx, channel_idx) = ...
-                            sum(any(exam_fp(tester.noiseFrequencies,:,channel_idx)>0,2))...
-                            + tester.FP(epoch_param_idx, channel_idx);
+                            sum(any(exam_tn(tester.noiseFrequencies,:,channel_idx)>0,2))...
+                            + tester.TN(epoch_param_idx, channel_idx);
     
                 end
             end
@@ -76,11 +77,10 @@ for stimulusIndex = tester.stimulusIndices
     end
 end
 
+fn_rate = 100*tester.FN/(numel(tester.noiseFrequencies))
 
-fp_rate = tester.FP/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+tn_rate = 100*tester.TN/(numel(tester.signalFrequencies))
 
-tp_rate = tester.TP/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+tp_rate = 100*tester.TP/(numel(tester.signalFrequencies))
 
-fn_rate = tester.FN/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
-
-tn_rate = tester.TN/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+fp_rate = 100*tester.FP/(numel(tester.noiseFrequencies))

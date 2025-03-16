@@ -9,14 +9,15 @@ clearvars; close all; clc;
 tester = ORDTester(ORDCalculator(DataLoader('sim')));
 
 tester.dataloader = tester.dataloader.genBulkSim( ...
-    groupNoiseMean=[5 0], groupNoiseStd=0).computeBulkFFTs(mode='sim');
+    groupNoiseMean=[-30 -30], groupNoiseStd=1.5*randi(5,1,11)).computeBulkFFTs(mode='sim');
 tester.age()
 
+K_stages = 5;
 tester.ord_calculator = ORDCalculator(tester.dataloader).fit_epochs( ...
     stimulusIndices = tester.dataloader.groupNoiseMean,...
     subjectIndices = tester.dataloader.groupNoiseStd,...
     startWindows = 1, ...
-    K_stages = [3 5 10], ...
+    K_stages = K_stages, ...
     single_or_bulk = 'bulk',...
     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
@@ -77,10 +78,14 @@ for noiseMean_idx = 1:numel(tester.dataloader.groupNoiseMean)
     end
 end
 
-fn_rate = 100*tester.FN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices))
+denom = numel(tester.noiseFrequencies)*numel(tester.dataloader.groupNoiseMean)...
+                                      *numel(tester.dataloader.groupNoiseStd);
+fn_rate = 100*tester.FN/(denom)
 
-tn_rate = 100*tester.TN/(numel(tester.signalFrequencies)*numel(tester.subjectIndices))
+tn_rate = 100*tester.TN/(denom)
 
-tp_rate = 100*tester.TP/(numel(tester.signalFrequencies)*numel(tester.subjectIndices))
+tp_rate = 100*tester.TP/(denom)
 
-fp_rate = 100*tester.FP/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices))
+fp_rate = 100*tester.FP/(denom)
+
+confmat = table(fp_rate, tp_rate, fn_rate, tn_rate, 'VariableNames',{'fp','tp','fn','tn'})

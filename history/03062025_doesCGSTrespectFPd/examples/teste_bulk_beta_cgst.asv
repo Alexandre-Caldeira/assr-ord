@@ -13,9 +13,9 @@ dtl = DataLoader('exp');
 
 % Or choose all
 nSubj = 11;
-nStim = 5;
+nStim = [3 5];
 dtl.selectedZanoteliSubjects = 1:numel(dtl.zanoteliSubjects);
-dtl.selectedZanoteliStimuli = [3 5]; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
+dtl.selectedZanoteliStimuli = 5; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
 
 % Load data, preprocess and filter
 dtl = dtl.loadBulkEEGData();
@@ -28,11 +28,23 @@ dtl.groupSignals = ppc.groupFilteredSignals;
 dtl = dtl.computeBulkFFTs();
 %%
 % M = 40 
-K_stages = [3 5 10];
+% K_stages = [2 3 5 8 10];
+% ordc = ORDCalculator(dtl).fit_epochs( ...
+%     stimulusIndices = dtl.selectedZanoteliStimuli,...
+%     subjectIndices = dtl.selectedZanoteliSubjects,...
+%     startWindows = [1 6 10 25], ... % windowStepSizes = 52, ...
+%     K_stages = K_stages,...
+%     single_or_bulk = 'bulk',...
+%     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
+%     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
+%     ... % then, compute on selected channels:
+%     );
+
+K_stages = [2 5];
 ordc = ORDCalculator(dtl).fit_epochs( ...
     stimulusIndices = dtl.selectedZanoteliStimuli,...
     subjectIndices = dtl.selectedZanoteliSubjects,...
-    startWindows = [1 5], ... % windowStepSizes = 52, ...
+    startWindows = 10, ... % windowStepSizes = 52, ...
     K_stages = K_stages,...
     single_or_bulk = 'bulk',...
     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
@@ -47,11 +59,11 @@ dtl.age()
 %% Test pipeline
 % Apply TEST(s) to objective response detector (MSC)
 tester = ORDTester(ordc);
-tester.desired_alpha = 0.2;
+tester.desired_alpha = 0.6;
+
 tester = tester.compute_bulk_beta_cgst_decisions();
 tester.age()
 
-%%
 % tester = tester.validateDetectionThresholds(dtl);
 disp(tester)
 
@@ -79,7 +91,7 @@ for stimulusIndex = tester.stimulusIndices
         for channel_idx = 1:numel(tester.ord_calculator.channels)
             for epoch_param_idx = 1:nParams 
                 exam_fp = cell2mat(tester.groupFP(stimulusIndex, subjectIndex, epoch_param_idx));
-                
+
                 if ~isempty(exam_fp)
                     % If there was a detection on any stage, 
                     % assign 1 to that exam, and repeat for all
@@ -96,16 +108,16 @@ for stimulusIndex = tester.stimulusIndices
                             + tester.FP(epoch_param_idx, channel_idx);
 
                     tester.FN(epoch_param_idx, channel_idx) = ...
-                            sum(any(exam_fp(tester.signalFrequencies,:,channel_idx)>0,2))...
-                            + tester.FP(epoch_param_idx, channel_idx);
+                            sum(any(exam_fn(tester.signalFrequencies,:,channel_idx)>0,2))...
+                            + tester.FN(epoch_param_idx, channel_idx);
 
                     tester.TP(epoch_param_idx, channel_idx) = ...
-                            sum(any(exam_fp(tester.signalFrequencies,:,channel_idx)>0,2))...
-                            + tester.FP(epoch_param_idx, channel_idx);
+                            sum(any(exam_tp(tester.signalFrequencies,:,channel_idx)>0,2))...
+                            + tester.TP(epoch_param_idx, channel_idx);
 
                     tester.TN(epoch_param_idx, channel_idx) = ...
-                            sum(any(exam_fp(tester.noiseFrequencies,:,channel_idx)>0,2))...
-                            + tester.FP(epoch_param_idx, channel_idx);
+                            sum(any(exam_tn(tester.noiseFrequencies,:,channel_idx)>0,2))...
+                            + tester.TN(epoch_param_idx, channel_idx);
     
                 end
             end
@@ -114,36 +126,12 @@ for stimulusIndex = tester.stimulusIndices
 end
 
 
-fp_rate = tester.FP/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+fp_rate = tester.FP/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
 
-tp_rate = tester.TP/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+tp_rate = tester.TP/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
 
-fn_rate = tester.FN/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+fn_rate = tester.FN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
 
-tn_rate = tester.TN/(numel(tester.noiseFrequencies)+numel(tester.subjectIndices))
+tn_rate = tester.TN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
 
-%%
-check = tester.FP + tester.FN + tester.TP + tester.TN;
-check_tested = check(tester.allTestFrequencies,:,:);
-check_untested = check;
-check_untested(tester.allTestFrequencies,:,:) = [];
-
-% decisao_por_exame = zeros(params.dataloader.noiseFrequencies,size(tester.FP,3));
-% fp_por_exame = squeeze(any(tester.FP(tester.dataloader.noiseFrequencies,:,:)>0,2));
-% fp_medio = 100*mean(fp_por_exame ,'all')
-% 
-% tn_por_exame = squeeze(any(tester.FP(tester.dataloader.noiseFrequencies,:,:)>0,2));
-% tn_medio = 100*mean(tn_por_exame ,'all')
-% 
-% tp_por_exame = squeeze(any(tester.TP(tester.dataloader.signalFrequencies,:,:)>0,2));
-% tp_medio = 100*mean(tp_por_exame ,'all')
-% 
-% fn_por_exame = squeeze(any(tester.FN(tester.dataloader.signalFrequencies,:,:)>0,2));
-% fn_medio = 100*mean(fn_por_exame ,'all')
-
-% find non-empty parameter sets
-
-
-% fp_por_param = cell(1);
-% tp_por_param = cell(1);
-% fn_por_param = cell(1);
+confmat = table(fp_rate, tp_rate, fn_rate, tn_rate, 'VariableNames',{'fp','tp','fn','tn'})

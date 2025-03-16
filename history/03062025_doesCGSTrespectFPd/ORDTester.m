@@ -134,7 +134,8 @@ classdef ORDTester
                             M = p.nWindows;
                             K = p.K_stages;
                             
-                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            % obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            obj = obj.patient_beta_cgst_threshold(M,K);
                             
                             obj.groupStageAlphas{epoch_idx} = obj.stageAlphas;
                             obj.groupStageGammas{epoch_idx} = obj.stageGammas;
@@ -182,6 +183,48 @@ classdef ORDTester
             obj.stageAlphas = aThresholds;
             obj.stageGammas = gThresholds;
         end
+
+        function obj = patient_beta_cgst_threshold(obj,M,K)
+            
+            alpha           = obj.desired_alpha;                        
+
+            Alpha_k         = ones(1,K)*(alpha/K);    
+            % Gamma_k         = ((1-alpha)/K).*ones(1,K);
+            x = 2/(K*(K+1));
+            sequence =-alpha + x * (1:K);
+            Gamma_k = sequence;
+            Resolution      = (1/0.00001); %(1/0.0001);                 
+            Xvalues         = 0:1/Resolution:1;            
+            Null         	= betapdf(Xvalues, 1, M-1);
+            Null            = Null/sum(Null);            
+            Chi2_Norm       = Null/sum(Null);             
+         
+            k               = 1;                           
+            aThresholds(k)	= 1 - Alpha_k(k).^(1./(M-1));  
+            gThresholds(k)	= 1-(1- Gamma_k(k)).^(1./(M-1));
+            TruncInd_Ra      = round(aThresholds(k)*Resolution);
+            TruncInd_Rg      = round(gThresholds(k)*Resolution);           
+            
+            for k = 2:K
+                NullTrunc                   = Null;                                                
+                NullTrunc(TruncInd_Ra:end)  = zeros(1, length(NullTrunc(TruncInd_Ra:end)));    
+                NullTrunc(1:TruncInd_Rg)    = zeros(1, length(NullTrunc(1:TruncInd_Rg)));
+                
+                Null2                       = conv(Chi2_Norm, NullTrunc);   
+                Null2                       = Null2 / (sum(Null2) / (1 - sum(Gamma_k(1:(k-1))) - sum(Alpha_k(1:(k-1)))));
+        
+                TruncInd_Ra                 = ORDTester.findIndex(Null2, sum(Null2) - Alpha_k(k)); 
+                aThresholds(k)              = TruncInd_Ra/Resolution;  
+                TruncInd_Rg                 = ORDTester.findIndex(Null2, Gamma_k(k), 1);
+                gThresholds(k)              = TruncInd_Rg/Resolution;
+                Null                        = Null2; 
+            end   
+
+
+            obj.stageAlphas = aThresholds;
+            obj.stageGammas = gThresholds;
+        end
+
 
         function [p,obj]  = validateDetectionThresholds(obj, p)
             arguments
@@ -261,7 +304,8 @@ classdef ORDTester
       
                             M = current_epoch(end) - current_epoch(end-1)+1;
                             K = p.K_stages;
-                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            % obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            obj = obj.patient_beta_cgst_threshold(M,K);
                             obj = obj.compute_beta_cgst_decisions();
 
                             obj.groupDecisions{epoch_idx} = obj.decisions;
@@ -278,27 +322,26 @@ classdef ORDTester
 
 
         function obj = compute_bulk_sim_beta_cgst_decisions(obj,p)
-            arguments
-                obj % The ORDCalculator class
+           arguments
+               obj % The ORDCalculator class
 
-                % p: additional parameters, passed as Name-Value arguments
-                %    declared below, including their default values.
-                p.dataloader = obj.dataloader;
-                p.channels = obj.dataloader.channels;
-                p.nChannels = numel(obj.dataloader.channels);
+               % p: additional parameters, passed as Name-Value arguments
+               %    declared below, including their default values.
+               p.dataloader = obj.dataloader;
+               p.channels = obj.dataloader.channels;
+               p.nChannels = numel(obj.dataloader.channels);
 
-                % parameters for exam reload (should this be here?)
-                p.subjectIndices = obj.ord_calculator.subjectIndices;
-                p.stimulusIndices = obj.ord_calculator.stimulusIndices; 
-                p.epochs = obj.ord_calculator.epochs;
+               % parameters for exam reload (should this be here?)
+               p.subjectIndices = obj.ord_calculator.subjectIndices;
+               p.stimulusIndices = obj.ord_calculator.stimulusIndices; 
+               p.epochs = obj.ord_calculator.epochs;
 
-                p.nWindows = obj.ord_calculator.nWindows;
-                p.K_stages = obj.ord_calculator.K_stages;
+               p.nWindows = obj.ord_calculator.nWindows;
+               p.K_stages = obj.ord_calculator.K_stages;
                                 
-            end
-            warning('Test pending')
+           end
+           warning('Test pending')
             
-            % obj.parameterizedMSC
            obj.epochs = p.epochs;
            obj.groupDecisions = cell(size(p.epochs));
            obj.groupTP = cell(size(obj.groupDecisions));
@@ -368,14 +411,14 @@ classdef ORDTester
                         
         
                         % SIGNAL
-                        if freq < p.allTestFrequencies(p.noiseFlag) && ...                         % not noise
+                        if freq < p.allTestFrequencies(p.noiseFlag) && ...              % not noise
                             sum(obj.lastExam(freq,1:k,channel)) > obj.stageAlphas(k)    % detected
                 
                             % obj.decisions(freq,k,channel) = obj.decisions(freq,k,channel) +1;
                             obj.TP(freq,k,channel) = obj.TP(freq,k,channel)+1;
                             % t_decisao(k,freq) = ~sum(t_decisao(:,freq),'all');
                     
-                        elseif freq < p.allTestFrequencies(p.noiseFlag) && ...                     % not noise
+                        elseif freq < p.allTestFrequencies(p.noiseFlag) && ...           % not noise
                                 sum(obj.lastExam(freq,1:k,channel)) <= obj.stageGammas(k)% gave up 
                 
                             % obj.decisions(freq,k,channel)  = obj.decisions(freq,k,channel) -1;
@@ -383,14 +426,14 @@ classdef ORDTester
                             % t_decisao(k,freq) = -1*(~sum(t_decisao(:,freq),'all'));
                 
                         % NOISE
-                        elseif freq >= p.allTestFrequencies(p.noiseFlag) && ...                    % is noise
-                                sum(obj.lastExam(freq,1:k,channel)) > obj.stageAlphas(k)       % detected
+                        elseif freq >= p.allTestFrequencies(p.noiseFlag) && ...          % is noise
+                                sum(obj.lastExam(freq,1:k,channel)) > obj.stageAlphas(k) % detected
                 
                             obj.FP(freq,k,channel) = obj.FP(freq,k,channel)+1;
                             % t_decisao(k,freq) = ~sum(t_decisao(:,freq),'all');
                             
-                        elseif freq >= p.allTestFrequencies(p.noiseFlag) && ...                    % is noise
-                                sum(obj.lastExam(freq,1:k,channel)) <= obj.stageGammas(k)       % gave up
+                        elseif freq >= p.allTestFrequencies(p.noiseFlag) && ...           % is noise
+                                sum(obj.lastExam(freq,1:k,channel)) <= obj.stageGammas(k) % gave up
                 
                             % obj.decisions(freq,k,channel)  = obj.decisions(freq,k,channel) +1;
                             obj.TN(freq,k,channel) = obj.TN(freq,k,channel)+1;
@@ -398,7 +441,6 @@ classdef ORDTester
 
                         else
                             if k==size(current_tests,2)
-
                                 warning('neither detection nor stop')
                             end
                             
@@ -407,7 +449,6 @@ classdef ORDTester
                     end
                 end
             end
-            % obj.decisions = FP;
 
         end
 
