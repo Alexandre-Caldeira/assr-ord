@@ -304,8 +304,8 @@ classdef ORDTester
       
                             M = current_epoch(end) - current_epoch(end-1)+1;
                             K = p.K_stages;
-                            % obj = obj.single_exam_beta_cgst_threshold(M,K);
-                            obj = obj.patient_beta_cgst_threshold(M,K);
+                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            % obj = obj.patient_beta_cgst_threshold(M,K);
                             obj = obj.compute_beta_cgst_decisions();
 
                             obj.groupDecisions{epoch_idx} = obj.decisions;

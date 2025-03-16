@@ -20,11 +20,16 @@ dtl.selectedZanoteliStimuli = 5; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to
 % Load data, preprocess and filter
 dtl = dtl.loadBulkEEGData();
 % ppc = PreProcessor().bulkZanoteliPreprocess(dtl);
-ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
+% ppc = PreProcessor();
+% ppc.groupProcessedSignals = dtl.groupSignals;
+% ppc = ppc.bulkAntunesFilter(dtl);
+ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkZanoteliPreprocess(dtl);
+
+% .bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
 
 % Reset SIGNALS to filtered for display
 % dtl.groupSignals = ppc.groupProcessedSignals;
-dtl.groupSignals = ppc.groupFilteredSignals;
+% dtl.groupSignals = ppc.groupFilteredSignals;
 dtl = dtl.computeBulkFFTs();
 
 %%
@@ -53,14 +58,14 @@ ordc = ORDCalculator(dtl).fit_epochs( ...
     ... % then, compute on selected channels:
     );
 
-single_channel = 1;
+single_channel = 1:16;
 ordc = ordc.bulk_compute_msc(channels = single_channel);
 dtl.age()
 
 %% Test pipeline
 % Apply TEST(s) to objective response detector (MSC)
 tester = ORDTester(ordc);
-tester.desired_alpha = 0.33s;
+tester.desired_alpha = 0.05;
 
 tester = tester.compute_bulk_beta_cgst_decisions();
 tester.age()
@@ -76,7 +81,7 @@ tester.age()
 % 3. paradaT (limita tempo): duração máxima do exame OU numero deamostras/janelas;
 % 4. paradaI (limita dados): NDC, futilidade/detecção-CGST, variância das amostras (SNR). 
 
-% Show results
+%% Show results
 
 nParams = numel(tester.epochs(1,1,:));
 nChannels = numel(tester.ord_calculator.channels);
@@ -133,4 +138,9 @@ fn_rate = tester.FN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices)
 
 tn_rate = tester.TN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
 
-confmat = table(fp_rate, tp_rate, fn_rate, tn_rate, 'VariableNames',{'fp','tp','fn','tn'})
+confmat = table( ...
+    mean(fp_rate(end,:)), ...
+    mean(tp_rate(end,:)), ...
+    mean(fn_rate(end,:)), ...
+    mean(tn_rate(end,:)), ...
+    'VariableNames',{'fp','tp','fn','tn'})

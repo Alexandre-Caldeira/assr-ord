@@ -9,7 +9,7 @@ clearvars; close all; clc;
 tester = ORDTester(ORDCalculator(DataLoader('sim')));
 
 tester.dataloader = tester.dataloader.genBulkSim( ...
-    groupNoiseMean=[-30 -30], groupNoiseStd=1.5*randi(5,1,11)).computeBulkFFTs(mode='sim');
+    groupNoiseMean=[-50 -50], groupNoiseStd=1.5*randi(5,1,11)).computeBulkFFTs(mode='sim');
 tester.age()
 
 K_stages = 5;
@@ -88,4 +88,7 @@ tp_rate = 100*tester.TP/(denom)
 
 fp_rate = 100*tester.FP/(denom)
 
-confmat = table(fp_rate, tp_rate, fn_rate, tn_rate, 'VariableNames',{'fp','tp','fn','tn'})
+confmat = table(mean(fp_rate,'all'), ...
+    mean(tp_rate(K_stages,:),'all'), ...
+    mean(fn_rate(K_stages,:),'all'), ...
+    mean(tn_rate(K_stages,:),'all'), 'VariableNames',{'fp','tp','fn','tn'})
