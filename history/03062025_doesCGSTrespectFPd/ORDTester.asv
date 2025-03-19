@@ -28,7 +28,15 @@ classdef ORDTester
         nTestFrequencies
         noiseMask
         noiseFlag
+        
+        
+        % Stores frequency spectrum  from all selected subjects and stimuli
+        groupMSC     % stimulus-subject-indexed cell: 
+                     % groupORD{stimulus,subject} -> ORD(frequency,test_stage,channel)
 
+        testDetectionThresholds
+        testStoppingThresholds
+        
         % Outputs
         groupDecisions
         decisions
@@ -87,7 +95,7 @@ classdef ORDTester
                 obj.dataloader = p.dataloader;
             end
 
-            % obj.groupMSC = obj.ord_calculator.groupMSC;
+            obj.groupMSC = obj.ord_calculator.groupMSC;
 
             obj.signalFrequencies = obj.dataloader.signalFrequencies;
             obj.noiseFrequencies = obj.dataloader.noiseFrequencies;
@@ -106,8 +114,7 @@ classdef ORDTester
             obj.stimulusIndices = obj.dataloader.selectedZanoteliStimuli;
             obj.subjectIndices = obj.dataloader.selectedZanoteliSubjects;
             
-            obj.previous_cgst_thresholds = cell(obj.dataloader.duration+1, ...
-                max(cell2mat(obj.ord_calculator.K_stages(:)))+1);
+            obj.previous_cgst_thresholds = cell(obj.dataloader.duration,obj.K_stages);
         end
 
         function obj = compute_beta_cgst_thresholds(obj)
@@ -132,8 +139,8 @@ classdef ORDTester
                             M = p.nWindows;
                             K = p.K_stages;
                             
-                            obj = obj.single_exam_beta_cgst_threshold(M,K);
-                            % obj = obj.patient_beta_cgst_threshold(M,K);
+                            % obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            obj = obj.patient_beta_cgst_threshold(M,K);
                             
                             obj.groupStageAlphas{epoch_idx} = obj.stageAlphas;
                             obj.groupStageGammas{epoch_idx} = obj.stageGammas;
@@ -145,9 +152,7 @@ classdef ORDTester
         end
 
         function obj = single_exam_beta_cgst_threshold(obj,M,K)
-
-    
-            check_previous = cell2mat(obj.previous_cgst_thresholds(M,K));
+            check_previous = obj.previous_cgst_thresholds(M,K);
             if ~isempty(check_previous)
                 obj.stageAlphas = check_previous(1,:);
                 obj.stageGammas = check_previous(2,:);
@@ -188,7 +193,7 @@ classdef ORDTester
 
             obj.stageAlphas = aThresholds;
             obj.stageGammas = gThresholds;
-            obj.previous_cgst_thresholds{M,K} = [aThresholds;gThresholds];
+            obj.previous_cgst_thresholds{M,K} = [aThresholds;gThresholds]
         end
 
         function obj = patient_beta_cgst_threshold(obj,M,K)
@@ -394,12 +399,12 @@ classdef ORDTester
                             M = current_epoch(end) - current_epoch(end-1)+1;
                             K = cell2mat(p.K_stages(epoch_idx));
         
-                            % t = tic()
+                            t = tic()
                             obj = obj.single_exam_beta_cgst_threshold(M,K);
-                            % if K>10
-                            %     fprintf('K = %d, took:\n',K)
-                            %     disp(toc(t));
-                            % end
+                            if K>10
+                                fprintf('K = %d, took:\n',K)
+                                disp(toc(t));
+                            end
                             obj = obj.compute_beta_cgst_decisions();
 
                             obj.groupTP{epoch_idx} = obj.TP;
