@@ -13,38 +13,34 @@ dtl = DataLoader('exp');
 
 % Or choose all
 nSubj = 11;
-nStim = [3 5];
+nStim = 5; % 3 5
 dtl.selectedZanoteliSubjects = 1:numel(dtl.zanoteliSubjects);
-dtl.selectedZanoteliStimuli = 5; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
+dtl.selectedZanoteliStimuli = 1:5; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
 
 % Load data, preprocess and filter
 dtl = dtl.loadBulkEEGData();
 % ppc = PreProcessor().bulkZanoteliPreprocess(dtl);
-ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
+% ppc = PreProcessor();
+% ppc.groupProcessedSignals = dtl.groupSignals;
+% ppc = ppc.bulkAntunesFilter(dtl);
+% ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkZanoteliPreprocess(dtl);
+
+% ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
+
+% .bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
 
 % Reset SIGNALS to filtered for display
 % dtl.groupSignals = ppc.groupProcessedSignals;
-dtl.groupSignals = ppc.groupFilteredSignals;
+% dtl.groupSignals = ppc.groupFilteredSignals;
 dtl = dtl.computeBulkFFTs();
+
 %%
 % M = 40 
-% K_stages = [2 3 5 8 10];
-% ordc = ORDCalculator(dtl).fit_epochs( ...
-%     stimulusIndices = dtl.selectedZanoteliStimuli,...
-%     subjectIndices = dtl.selectedZanoteliSubjects,...
-%     startWindows = [1 6 10 25], ... % windowStepSizes = 52, ...
-%     K_stages = K_stages,...
-%     single_or_bulk = 'bulk',...
-%     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
-%     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
-%     ... % then, compute on selected channels:
-%     );
-
-K_stages = [2 5];
+K_stages = [2 3 5 8 10];
 ordc = ORDCalculator(dtl).fit_epochs( ...
     stimulusIndices = dtl.selectedZanoteliStimuli,...
     subjectIndices = dtl.selectedZanoteliSubjects,...
-    startWindows = 10, ... % windowStepSizes = 52, ...
+    startWindows = [1 6 10 25], ... % windowStepSizes = 52, ...
     K_stages = K_stages,...
     single_or_bulk = 'bulk',...
     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
@@ -52,22 +48,33 @@ ordc = ORDCalculator(dtl).fit_epochs( ...
     ... % then, compute on selected channels:
     );
 
-single_channel = 1;
+% 23 secs
+% K_stages = 5;
+% ordc = ORDCalculator(dtl).fit_epochs( ...
+%     stimulusIndices = dtl.selectedZanoteliStimuli,...
+%     subjectIndices = dtl.selectedZanoteliSubjects,...
+%     startWindows = 10, ... % windowStepSizes = 52, ...
+%     K_stages = K_stages,...
+%     single_or_bulk = 'bulk',...
+%     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
+%     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
+%     ... % then, compute on selected channels:
+%     );
+
+single_channel = 1:16;
 ordc = ordc.bulk_compute_msc(channels = single_channel);
 dtl.age()
 
 %% Test pipeline
 % Apply TEST(s) to objective response detector (MSC)
 tester = ORDTester(ordc);
-tester.desired_alpha = 0.6;
+tester.desired_alpha = 0.05;
 
 tester = tester.compute_bulk_beta_cgst_decisions();
 tester.age()
+% disp(tester)
 
-% tester = tester.validateDetectionThresholds(dtl);
-disp(tester)
-
-% Comportamento:
+% Comportamento (a implementar)
 % O que precisamos testar? Janelas! 
 % (qual limite para deteccao, quando parar, como sinalizar)
 %
@@ -103,9 +110,7 @@ for stimulusIndex = tester.stimulusIndices
                     exam_tp = cell2mat(tester.groupTP(stimulusIndex, subjectIndex, epoch_param_idx));
                     exam_tn = cell2mat(tester.groupTN(stimulusIndex, subjectIndex, epoch_param_idx));
 
-                    tester.FP(epoch_param_idx, channel_idx) = ...
-                            sum(any(exam_fp(tester.noiseFrequencies,:,channel_idx)>0,2))...
-                            + tester.FP(epoch_param_idx, channel_idx);
+                    
 
                     tester.FN(epoch_param_idx, channel_idx) = ...
                             sum(any(exam_fn(tester.signalFrequencies,:,channel_idx)>0,2))...
@@ -114,6 +119,10 @@ for stimulusIndex = tester.stimulusIndices
                     tester.TP(epoch_param_idx, channel_idx) = ...
                             sum(any(exam_tp(tester.signalFrequencies,:,channel_idx)>0,2))...
                             + tester.TP(epoch_param_idx, channel_idx);
+
+                    tester.FP(epoch_param_idx, channel_idx) = ...
+                            sum(any(exam_fp(tester.noiseFrequencies,:,channel_idx)>0,2))...
+                            + tester.FP(epoch_param_idx, channel_idx);
 
                     tester.TN(epoch_param_idx, channel_idx) = ...
                             sum(any(exam_tn(tester.noiseFrequencies,:,channel_idx)>0,2))...
@@ -126,12 +135,18 @@ for stimulusIndex = tester.stimulusIndices
 end
 
 
-fp_rate = tester.FP/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
+denom = numel(tester.noiseFrequencies)*numel(tester.subjectIndices)*numel(tester.stimulusIndices);
+fp_rate = tester.FP/(denom);
 
-tp_rate = tester.TP/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
+tp_rate = tester.TP/(denom);
 
-fn_rate = tester.FN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
+fn_rate = tester.FN/(denom);
 
-tn_rate = tester.TN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
+tn_rate = tester.TN/(denom);
 
-confmat = table(fp_rate, tp_rate, fn_rate, tn_rate, 'VariableNames',{'fp','tp','fn','tn'})
+confmat = table( ...
+    100*mean(fn_rate(end,:)), ...
+    100*mean(fp_rate(end,:)), ...
+    100*mean(tp_rate(end,:)), ...
+    100*mean(tn_rate(end,:)), ...
+    'VariableNames',{'fn','fp','tp','tn'})

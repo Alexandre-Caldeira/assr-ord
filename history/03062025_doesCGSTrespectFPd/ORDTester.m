@@ -108,7 +108,10 @@ classdef ORDTester
             obj.epochs_index_metadata = obj.ord_calculator.epochs_index_metadata;
             obj.epochs_method = obj.ord_calculator.epochs_method;
             obj.K_stages    = obj.ord_calculator.K_stages;
-            obj.nWindows    = obj.ord_calculator.nWindows;          
+            obj.nWindows    = obj.ord_calculator.nWindows; 
+
+            obj.stimulusIndices = obj.dataloader.selectedZanoteliStimuli;
+            obj.subjectIndices = obj.dataloader.selectedZanoteliSubjects;
 
         end
 
@@ -190,9 +193,16 @@ classdef ORDTester
 
             Alpha_k         = ones(1,K)*(alpha/K);    
             % Gamma_k         = ((1-alpha)/K).*ones(1,K);
-            x = 2/(K*(K+1));
-            sequence =-alpha + x * (1:K);
-            Gamma_k = sequence;
+            % x = 2/(K*(K+1));
+            % sequence =-alpha + x * (1:K);
+            % Gamma_k = flip(sequence);
+            % Gamma_k = [(1-alpha)*0.80/(K-3)*ones(1,K-3) ((1-alpha)*0.20/3)*ones(1,3)];
+            % Gamma_k = [(1-alpha)*0.99/(K-3)*ones(1,K-3) ((1-alpha)*0.01/3)*ones(1,3)];
+
+            n=3;
+            pct = 0.70;
+            Gamma_k = [(1-alpha)*pct/(K-n)*ones(1,K-n) ((1-alpha)*(1-pct)/3)*ones(1,n)];            
+
             Resolution      = (1/0.00001); %(1/0.0001);                 
             Xvalues         = 0:1/Resolution:1;            
             Null         	= betapdf(Xvalues, 1, M-1);
@@ -299,13 +309,26 @@ classdef ORDTester
                             p.nWindows = cell2mat(obj.nWindows(epoch_idx));
                             p.K_stages = cell2mat(obj.K_stages(epoch_idx));
 
+                            % if p.K_stages > 5
+                            %     warning('large n of convs')
+                            % end
+
                             obj.ord_calculator.MSC = cell2mat( ...
                                 obj.ord_calculator.groupMSC(stimulusIndex,subjectIndex,params_idx));
       
                             M = current_epoch(end) - current_epoch(end-1)+1;
                             K = p.K_stages;
-                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+
+
+                            % obj = obj.single_exam_beta_cgst_threshold(M,K);
                             % obj = obj.patient_beta_cgst_threshold(M,K);
+                            t = tic();
+                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            if K>10
+                                disp(toc(t));
+                            end
+
+
                             obj = obj.compute_beta_cgst_decisions();
 
                             obj.groupDecisions{epoch_idx} = obj.decisions;
@@ -366,7 +389,12 @@ classdef ORDTester
       
                             M = current_epoch(end) - current_epoch(end-1)+1;
                             K = cell2mat(p.K_stages(epoch_idx));
+        
+                            t = tic()
                             obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            if K>10
+                                disp(toc(t));
+                            end
                             obj = obj.compute_beta_cgst_decisions();
 
                             obj.groupTP{epoch_idx} = obj.TP;

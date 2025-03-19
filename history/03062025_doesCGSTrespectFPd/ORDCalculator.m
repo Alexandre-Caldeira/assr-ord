@@ -116,6 +116,13 @@ classdef ORDCalculator
                                  for this_windowStepSize = p.windowStepSizes
 
                                      this_epoch = this_startWindow:this_windowStepSize:this_lastWindow;
+                                     if numel(this_epoch) > 30 || numel(this_epoch) ==0
+                                         if numel(this_epoch)> 30
+                                            warning('skipping, large n of convs')
+                                         end
+                                         continue
+                                    
+                                     end
                                      
                                      obj.epochs{stimulus_index, ...
                                          subject_index, ...

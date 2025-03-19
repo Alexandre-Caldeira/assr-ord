@@ -4,65 +4,60 @@ clearvars; close all; clc;
 % Load object with default exam and reset data
 dtl = DataLoader('exp');
 
-% Define size of vector with randomly selected exams
-% and randomly select subjects and stimuli without replacement
-% nSubj = 5;
-% nStim = 3;
-% dtl.selectedZanoteliSubjects = randperm(numel(dtl.zanoteliSubjects),nSubj);
-% dtl.selectedZanoteliStimuli = randperm(numel(dtl.zanoteliStimulusNames)-1,nStim); % -1 to remove 'ESP'
-
-% Or choose all
-nSubj = 11;
-nStim = 5; % 3 5
-dtl.selectedZanoteliSubjects = 1:numel(dtl.zanoteliSubjects);
-dtl.selectedZanoteliStimuli = 5; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
+dtl.selectedZanoteliSubjects = 1:11; %:numel(dtl.zanoteliSubjects);
+dtl.selectedZanoteliStimuli = 3; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
 
 % Load data, preprocess and filter
 dtl = dtl.loadBulkEEGData();
-% ppc = PreProcessor().bulkZanoteliPreprocess(dtl);
-% ppc = PreProcessor();
-% ppc.groupProcessedSignals = dtl.groupSignals;
-% ppc = ppc.bulkAntunesFilter(dtl);
-% ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkZanoteliPreprocess(dtl);
-
 % ppc = PreProcessor().bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
 
-% .bulkZanoteliPreprocess(dtl).bulkAntunesFilter(dtl);
-
 % Reset SIGNALS to filtered for display
-% dtl.groupSignals = ppc.groupProcessedSignals;
-% dtl.groupSignals = ppc.groupFilteredSignals;
-dtl = dtl.computeBulkFFTs();
+dtl = dtl.computeBulkFFTs(); % dtl.groupSignals = ppc.groupFilteredSignals;
+dtl.age;
+
+%% import parameters from Vaz 2024
+caminho = 'C:\PPGEE\Assessing CGST on ASSR\Numero_Deteccoes_consecutiva_H_recebidodePatricia14022025\Numero_Deteccoes_consecutiva_H\';
+vaz_data = load([caminho,'NDC_AlfaCorrigido_Mmax240_alfa_0.05_FPdesejado0.05.mat'], ...
+    'alfa_corrigido', 'NDC_minimo','P', 'nRuns');
+
+% vaz_startWindows = vaz_data.P(:,1)';
+% vaz_windowSizes = vaz_data.P(:,2)';
+
+% % filter number of stages
+vaz_windowSizes = 8:238;
+K_stages = zeros(size(vaz_windowSizes));
+for idx = 1:numel(K_stages)
+    K_stages(idx) = numel(1:vaz_windowSizes(idx):240);
+end
+
+% no_go = [find(K_stages >5), find(K_stages<=1)];
+% vaz_startWindows(find(K_stages >5)) = [];
+% vaz_windowSizes(find(K_stages >5)) = [];
+% 
+% vaz_windowSizes
+
+vaz_translated_Kstages = flip(unique(K_stages));
+vaz_startWindows = 1:240;
 
 %%
-% M = 40 
-% K_stages = [2 3 5 8 10];
-% ordc = ORDCalculator(dtl).fit_epochs( ...
-%     stimulusIndices = dtl.selectedZanoteliStimuli,...
-%     subjectIndices = dtl.selectedZanoteliSubjects,...
-%     startWindows = [1 6 10 25], ... % windowStepSizes = 52, ...
-%     K_stages = K_stages,...
-%     single_or_bulk = 'bulk',...
-%     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
-%     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
-%     ... % then, compute on selected channels:
-%     );
-
-K_stages = 5;
 ordc = ORDCalculator(dtl).fit_epochs( ...
     stimulusIndices = dtl.selectedZanoteliStimuli,...
     subjectIndices = dtl.selectedZanoteliSubjects,...
-    startWindows = 10, ... % windowStepSizes = 52, ...
-    K_stages = K_stages,...
+    startWindows = vaz_startWindows, ... % windowStepSizes = 52, ...
+    K_stages = vaz_translated_Kstages(find(vaz_translated_Kstages<10)),...
     single_or_bulk = 'bulk',...
     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
     ... % then, compute on selected channels:
     );
 
-single_channel = 1:16;
+
+disp('Epochs are computed')
+ordc.age()
+
+single_channel = 1;
 ordc = ordc.bulk_compute_msc(channels = single_channel);
-dtl.age()
+ordc.age()
 
 %% Test pipeline
 % Apply TEST(s) to objective response detector (MSC)
@@ -76,7 +71,7 @@ tester.age()
 % Comportamento (a implementar)
 % O que precisamos testar? Janelas! 
 % (qual limite para deteccao, quando parar, como sinalizar)
-%
+% 
 % Calculamos a posição de inicio e fim das janelas/testes com base em 4 parametros:
 % 1. inicio: Instante de inicio do exame
 % 2. tamanho: Numero de testes OU Numero de amostras por teste OU Intervalo entre testes;
@@ -84,6 +79,7 @@ tester.age()
 % 4. paradaI (limita dados): NDC, futilidade/detecção-CGST, variância das amostras (SNR). 
 
 %% Show results
+
 
 nParams = numel(tester.epochs(1,1,:));
 nChannels = numel(tester.ord_calculator.channels);
@@ -96,7 +92,14 @@ for stimulusIndex = tester.stimulusIndices
     for subjectIndex = tester.subjectIndices
         for channel_idx = 1:numel(tester.ord_calculator.channels)
             for epoch_param_idx = 1:nParams 
-                exam_fp = cell2mat(tester.groupFP(stimulusIndex, subjectIndex, epoch_param_idx));
+                
+                if size(tester.groupFP,1)==1
+                    exam_fp = cell2mat(tester.groupFP(1, subjectIndex, epoch_param_idx));
+                elseif size(tester.groupFP,2)==1
+                    exam_fp = cell2mat(tester.groupFP(stimulusIndex, 1, epoch_param_idx));
+                else
+                    exam_fp = cell2mat(tester.groupFP(stimulusIndex, subjectIndex, epoch_param_idx));
+                end
 
                 if ~isempty(exam_fp)
                     % If there was a detection on any stage, 
@@ -105,10 +108,23 @@ for stimulusIndex = tester.stimulusIndices
                     % + Add previous results from other subjs
                     % To compute rate (pct), divide by #freqs and #subj
 
-                    exam_fn = cell2mat(tester.groupFN(stimulusIndex, subjectIndex, epoch_param_idx));
-                    exam_tp = cell2mat(tester.groupTP(stimulusIndex, subjectIndex, epoch_param_idx));
-                    exam_tn = cell2mat(tester.groupTN(stimulusIndex, subjectIndex, epoch_param_idx));
+                    if size(tester.groupFP,1)==1
+                        exam_fn = cell2mat(tester.groupFN(1, subjectIndex, epoch_param_idx));
+                        exam_tp = cell2mat(tester.groupTP(1, subjectIndex, epoch_param_idx));
+                        exam_tn = cell2mat(tester.groupTN(1, subjectIndex, epoch_param_idx));
 
+                    elseif size(tester.groupFP,2)==1
+                        exam_fn = cell2mat(tester.groupFN(stimulusIndex, 1, epoch_param_idx));
+                        exam_tp = cell2mat(tester.groupTP(stimulusIndex, 1, epoch_param_idx));
+                        exam_tn = cell2mat(tester.groupTN(stimulusIndex, 1, epoch_param_idx));
+
+                    else
+                        exam_fn = cell2mat(tester.groupFN(stimulusIndex, subjectIndex, epoch_param_idx));
+                        exam_tp = cell2mat(tester.groupTP(stimulusIndex, subjectIndex, epoch_param_idx));
+                        exam_tn = cell2mat(tester.groupTN(stimulusIndex, subjectIndex, epoch_param_idx));
+
+                    end
+                    
                     
 
                     tester.FN(epoch_param_idx, channel_idx) = ...
@@ -134,17 +150,18 @@ for stimulusIndex = tester.stimulusIndices
 end
 
 
-fp_rate = tester.FP/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
+denom = numel(tester.noiseFrequencies)*numel(tester.subjectIndices)*numel(tester.stimulusIndices);
+fp_rate = tester.FP/(denom);
 
-tp_rate = tester.TP/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
+tp_rate = tester.TP/(denom);
 
-fn_rate = tester.FN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
+fn_rate = tester.FN/(denom);
 
-tn_rate = tester.TN/(numel(tester.noiseFrequencies)*numel(tester.subjectIndices));
+tn_rate = tester.TN/(denom);
 
 confmat = table( ...
-    100*min(fn_rate(end,:)), ...
-    100*max(fp_rate(end,:)), ...
-    100*max(tp_rate(end,:)), ...
-    100*max(tn_rate(end,:)), ...
+    100*mean(fn_rate(end,:)), ...
+    100*mean(fp_rate(end,:)), ...
+    100*mean(tp_rate(end,:)), ...
+    100*mean(tn_rate(end,:)), ...
     'VariableNames',{'fn','fp','tp','tn'})
