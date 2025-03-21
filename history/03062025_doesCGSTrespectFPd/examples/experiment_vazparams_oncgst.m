@@ -2,7 +2,8 @@
 clearvars; close all; clc;
 
 % Load object with default exam and reset data
-dtl = DataLoader('exp', 'C:\Users\alexa\Desktop\Sinais_EEG\');
+% dtl = DataLoader('exp', 'C:\Users\alexa\Desktop\Sinais_EEG\');
+dtl = DataLoader('exp');
 
 dtl.selectedZanoteliSubjects = 1:11; %:numel(dtl.zanoteliSubjects);
 dtl.selectedZanoteliStimuli = 3; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
@@ -16,7 +17,8 @@ dtl = dtl.computeBulkFFTs(); % dtl.groupSignals = ppc.groupFilteredSignals;
 dtl.age;
 
 %% import parameters from Vaz 2024
-caminho = 'C:\Users\alexa\Desktop\Numero_Deteccoes_consecutiva_H\';
+% caminho = 'C:\Users\alexa\Desktop\Numero_Deteccoes_consecutiva_H\';
+caminho = 'C:\PPGEE\Assessing CGST on ASSR\Numero_Deteccoes_consecutiva_H_recebidodePatricia14022025\Numero_Deteccoes_consecutiva_H\';
 vaz_data = load([caminho,'NDC_AlfaCorrigido_Mmax240_alfa_0.05_FPdesejado0.05.mat'], ...
     'alfa_corrigido', 'NDC_minimo','P', 'nRuns');
 
@@ -44,13 +46,13 @@ ordc = ORDCalculator(dtl).fit_epochs( ...
     stimulusIndices = dtl.selectedZanoteliStimuli,...
     subjectIndices = dtl.selectedZanoteliSubjects,...
     startWindows = vaz_startWindows, ... % windowStepSizes = 52, ...
-    K_stages = vaz_translated_Kstages(vaz_translated_Kstages<10),...
+    K_stages = 2:10,...
     single_or_bulk = 'bulk',...
     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
     ... % then, compute on selected channels:
     );
-
+ 
 
 disp('Epochs are computed')
 ordc.age()
