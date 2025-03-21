@@ -2,8 +2,7 @@
 clearvars; close all; clc;
 
 % Load object with default exam and reset data
-% dtl = DataLoader('exp', 'C:\Users\alexa\Desktop\Sinais_EEG\');
-dtl = DataLoader('exp');
+dtl = DataLoader('exp', 'C:\Users\alexa\Desktop\Sinais_EEG\');
 
 dtl.selectedZanoteliSubjects = 1:11; %:numel(dtl.zanoteliSubjects);
 dtl.selectedZanoteliStimuli = 3; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
@@ -38,10 +37,21 @@ end
 % vaz_windowSizesS
 
 vaz_translated_Kstages = flip(unique(K_stages));
-vaz_startWindows = 1:30;
+all_vaz_startWindows = {[1:30 240],...
+    [31:60 240],...
+    [61:90 240],...
+    [91:120 240],...
+    [121:150 240],...
+    [151:180 240],...
+    [181:210 240],...
+    [211:239 240],...
+    };
 % vaz_startWindows = 121:240;
 
+for idx = 8:numel(all_vaz_startWindows)
 %%
+vaz_startWindows = cell2mat(all_vaz_startWindows(idx));
+
 ordc = ORDCalculator(dtl).fit_epochs( ...
     stimulusIndices = dtl.selectedZanoteliStimuli,...
     subjectIndices = dtl.selectedZanoteliSubjects,...
@@ -53,7 +63,7 @@ ordc = ORDCalculator(dtl).fit_epochs( ...
     ... % then, compute on selected channels:
     );
 
-fprintf('\tEpochs are computed.\n')
+fprintf('\tEpochs are computed for idx %d in all_vaz_startWindows.\n',idx)
 ordc.age()
 
 single_channel = 1;
@@ -92,6 +102,7 @@ tester.TN = zeros(nParams,nChannels);
 for stimulusIndex = tester.stimulusIndices
     for subjectIndex = tester.subjectIndices
         for channel_idx = 1:numel(tester.ord_calculator.channels)
+            nonemptyparams_idxs = [];
             for epoch_param_idx = 1:nParams 
                 
                 if size(tester.groupFP,1)==1
@@ -143,6 +154,10 @@ for stimulusIndex = tester.stimulusIndices
                     tester.TN(epoch_param_idx, channel_idx) = ...
                             sum(any(exam_tn(tester.noiseFrequencies,:,channel_idx)>0,2))...
                             + tester.TN(epoch_param_idx, channel_idx);
+
+                    nonemptyparams_idxs = [nonemptyparams_idxs,...
+                                            epoch_param_idx];
+                        %sub2ind(size(tester.FP), epoch_param_idx, channel_idx)];
     
                 end
             end
@@ -161,10 +176,10 @@ fn_rate = tester.FN/(denom);
 tn_rate = tester.TN/(denom);
 
 confmat = table( ...
-    100*mean(fn_rate(end,:)), ...
-    100*mean(fp_rate(end,:)), ...
-    100*mean(tp_rate(end,:)), ...
-    100*mean(tn_rate(end,:)), ...
+    100*mean(fn_rate(nonemptyparams_idxs,single_channel)), ...
+    100*mean(fp_rate(nonemptyparams_idxs,single_channel)), ...
+    100*mean(tp_rate(nonemptyparams_idxs,single_channel)), ...
+    100*mean(tn_rate(nonemptyparams_idxs,single_channel)), ...
     'VariableNames',{'fn','fp','tp','tn'})
 
 tester_checkpoint = struct();
@@ -182,14 +197,24 @@ tester_checkpoint.epochs_index_metadata = tester.ord_calculator.epochs_index_met
 
 tester_checkpoint.vaz_translated_Kstages = vaz_translated_Kstages;
 tester_checkpoint.vaz_startWindows = vaz_startWindows;
-
+tester_checkpoint.nonemptyparams_idxs = tester_checkpoint;
 
 [Y,MO,D,H,MI,S] = datevec(datetime);
-s = ['tester_checkpoint_1_T',...
+s = ['tester_checkpoint_',num2str(idx),'_T',...
     num2str(H),'_',num2str(MI),'_',num2str(fix(S)),...
     num2str(D),'_',num2str(MO),'_',num2str(Y),'.mat'];
 save(s,'tester_checkpoint','-v7.3')
 
+clear tester
+clear ordc
+
+end
 
 
+
+%%
+figure;
+plot(100*fp_rate(nonemptyparams_idxs,1),'.')
+figure;
+plot(100*tp_rate(nonemptyparams_idxs,1),'.')
 

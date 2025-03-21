@@ -2,8 +2,7 @@
 clearvars; close all; clc;
 
 % Load object with default exam and reset data
-% dtl = DataLoader('exp', 'C:\Users\alexa\Desktop\Sinais_EEG\');
-dtl = DataLoader('exp');
+dtl = DataLoader('exp', 'C:\Users\alexa\Desktop\Sinais_EEG\');
 
 dtl.selectedZanoteliSubjects = 1:11; %:numel(dtl.zanoteliSubjects);
 dtl.selectedZanoteliStimuli = 3; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'
@@ -168,28 +167,4 @@ confmat = table( ...
     'VariableNames',{'fn','fp','tp','tn'})
 
 tester_checkpoint = struct();
-tester_checkpoint.epochs = tester.epochs ;
-tester_checkpoint.groupTP = tester.groupTP;
-tester_checkpoint.groupTN = tester.groupTN;
-tester_checkpoint.groupFP = tester.groupFP;
-tester_checkpoint.groupFN = tester.groupFN;
-tester_checkpoint.previous_cgst_thresholds = tester.previous_cgst_thresholds;
-tester_checkpoint.allTestFrequencies = tester.allTestFrequencies;
-
-tester_checkpoint.selectedZanoteliSubjects = tester.dataloader.selectedZanoteliSubjects;
-tester_checkpoint.selectedZanoteliStimuli = tester.dataloader.selectedZanoteliStimuli;
-tester_checkpoint.epochs_index_metadata = tester.ord_calculator.epochs_index_metadata;
-
-tester_checkpoint.vaz_translated_Kstages = vaz_translated_Kstages;
-tester_checkpoint.vaz_startWindows = vaz_startWindows;
-
-
-[Y,MO,D,H,MI,S] = datevec(datetime);
-s = ['tester_checkpoint_1_T',...
-    num2str(H),'_',num2str(MI),'_',num2str(fix(S)),...
-    num2str(D),'_',num2str(MO),'_',num2str(Y),'.mat'];
-save(s,'tester_checkpoint','-v7.3')
-
-
-
-
+tester_checkpoint.

@@ -191,7 +191,7 @@ classdef DataLoader
 
                     x = awgn( ... % add white gaussian noise
                             obj.signals(:,epoch,channel), ... % to this section of signal
-                            obj.SNRfun()-rand()*sqrt(i),'measured','db')'; % with this SNR in measured dB
+                            obj.SNRfun()*epoch,'measured','db')'; % with this SNR in measured dB
 
                     % Scale to uV
                     obj.signals(:,epoch,channel)  = (10^-6) * x;  

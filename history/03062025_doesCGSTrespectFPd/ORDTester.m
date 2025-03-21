@@ -53,6 +53,13 @@ classdef ORDTester
         % (bad practice, fix later)
         dataloader
         ord_calculator
+        
+        %debugging features
+        latest_stim
+        latest_subj
+        latest_epoch_idx
+        latest_windowSize
+        latest_K
 
         % Utils
         timer   % obj timer
@@ -147,11 +154,15 @@ classdef ORDTester
         function obj = single_exam_beta_cgst_threshold(obj,M,K)
 
     
-            check_previous = cell2mat(obj.previous_cgst_thresholds(M,K));
-            if ~isempty(check_previous)
-                obj.stageAlphas = check_previous(1,:);
-                obj.stageGammas = check_previous(2,:);
-                return
+            if M<=size(obj.previous_cgst_thresholds,1) ...
+                    && K<=size(obj.previous_cgst_thresholds,2)
+
+                check_previous = cell2mat(obj.previous_cgst_thresholds(M,K));
+                if ~isempty(check_previous)
+                    obj.stageAlphas = check_previous(1,:);
+                    obj.stageGammas = check_previous(2,:);
+                    return
+                end
             end
             
             alpha           = obj.desired_alpha;                        
@@ -289,7 +300,7 @@ classdef ORDTester
                 p.epochs = obj.ord_calculator.epochs;
                                 
             end
-            warning('Test pending')
+            % warning('Test pending')
             
             % obj.parameterizedMSC
            obj.groupDecisions = cell(size(p.epochs));
@@ -297,9 +308,14 @@ classdef ORDTester
            obj.groupTN = cell(size(p.epochs));
            obj.groupFP = cell(size(p.epochs));
            obj.groupFN = cell(size(p.epochs));
-
+          
            for stimulusIndex = p.stimulusIndices
+               obj.latest_stim = stimulusIndex;
+                            
                 for subjectIndex = p.subjectIndices
+
+                    obj.latest_subj = subjectIndex;
+
                     selected_epochs = p.epochs(stimulusIndex, subjectIndex,:);
 
                     for params_idx = 1:numel(selected_epochs)
@@ -310,12 +326,22 @@ classdef ORDTester
                             epoch_idx = sub2ind(size(obj.epochs), ...
                                 stimulusIndex, subjectIndex, params_idx );
 
+                            
+                            obj.latest_epoch_idx =  epoch_idx;      
+
                             p.nWindows = cell2mat(obj.nWindows(epoch_idx));
+                            
                             p.K_stages = cell2mat(obj.K_stages(epoch_idx));
 
                             % if p.K_stages > 5
                             %     warning('large n of convs')
                             % end
+                            pct = fix(100*params_idx/numel(selected_epochs));
+                            if rem(pct,20)==0
+                                fprintf('\n \t [%s] %d%% of current stim/subj (%d / %d).\n', ...
+                                    datetime, pct, obj.latest_stim, obj.latest_subj)
+                                                              
+                            end
 
                             obj.ord_calculator.MSC = cell2mat( ...
                                 obj.ord_calculator.groupMSC(stimulusIndex,subjectIndex,params_idx));
@@ -323,14 +349,16 @@ classdef ORDTester
                             M = current_epoch(end) - current_epoch(end-1)+1;
                             K = p.K_stages;
 
+                            obj.latest_windowSize = M;
+                            obj.latest_K = K;
 
                             % obj = obj.single_exam_beta_cgst_threshold(M,K);
                             % obj = obj.patient_beta_cgst_threshold(M,K);
-                            t = tic();
+                            % t = tic();
                             obj = obj.single_exam_beta_cgst_threshold(M,K);
-                            if K>10
-                                disp(toc(t));
-                            end
+                            % if K>10
+                            %     disp(toc(t));
+                            % end
 
 
                             obj = obj.compute_beta_cgst_decisions();
@@ -367,7 +395,7 @@ classdef ORDTester
                p.K_stages = obj.ord_calculator.K_stages;
                                 
            end
-           warning('Test pending')
+           % warning('Test pending')
             
            obj.epochs = p.epochs;
            obj.groupDecisions = cell(size(p.epochs));
@@ -496,8 +524,8 @@ classdef ORDTester
         % UTILS
         function age(obj)
             fprintf( ...
-                '\n\tThis ORDTester was built %0.2f seconds ago.\n\n', ...
-                round(toc(obj.timer),2))
+                '\t [%s] This ORDTester was built %0.2f seconds ago.\n\n', ...
+                datetime, round(toc(obj.timer),2))
         end
 
 

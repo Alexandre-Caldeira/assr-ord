@@ -98,25 +98,57 @@ classdef PreProcessor
         end
 
         function obj = bulkZanoteliPreprocess(obj, dataloader)
-             obj.groupProcessedSignals = cell(numel(dataloader.selectedZanoteliStimuli), ...
+
+            if matches(dataloader.mode(1:3),'exp', IgnoreCase=true)
+            
+                obj.groupProcessedSignals = cell(numel(dataloader.selectedZanoteliStimuli), ...
                                     numel(dataloader.selectedZanoteliSubjects));
-
-            for stimulusIndex = dataloader.selectedZanoteliStimuli
-                for subjectIndex = dataloader.selectedZanoteliSubjects
-
-                    % Reset signal data and parameters
-                    dataloader.signals = cell2mat(dataloader.groupSignals(stimulusIndex,subjectIndex));
-                    dataloader.fs = size(dataloader.signals, 1);
-                    dataloader.nfft = dataloader.fs;
-                    dataloader.nBins = floor(dataloader.fs/2)+1;
-                    dataloader.zanoteliStimulusIndex = stimulusIndex;
-                    dataloader.zanoteliSubjectIndex = subjectIndex;
-
-                    obj = obj.zanoteliPreProcessing(dataloader);
-
-                    obj.groupProcessedSignals{stimulusIndex,subjectIndex} = obj.processedSignals;
-
+    
+                for stimulusIndex = dataloader.selectedZanoteliStimuli
+                    for subjectIndex = dataloader.selectedZanoteliSubjects
+    
+                        % Reset signal data and parameters
+                        dataloader.signals = cell2mat(dataloader.groupSignals(stimulusIndex,subjectIndex));
+                        dataloader.fs = size(dataloader.signals, 1);
+                        dataloader.nfft = dataloader.fs;
+                        dataloader.nBins = floor(dataloader.fs/2)+1;
+                        dataloader.zanoteliStimulusIndex = stimulusIndex;
+                        dataloader.zanoteliSubjectIndex = subjectIndex;
+    
+                        obj = obj.zanoteliPreProcessing(dataloader);
+    
+                        obj.groupProcessedSignals{stimulusIndex,subjectIndex} = obj.processedSignals;
+    
+                    end
                 end
+
+            elseif matches(dataloader.mode(1:3),'sim', IgnoreCase=true) 
+                
+                 obj.groupProcessedSignals = cell(numel(dataloader.selectedZanoteliStimuli), ...
+                                    numel(dataloader.selectedZanoteliSubjects));
+    
+                for stimulusIndex = dataloader.selectedZanoteliStimuli
+                    for subjectIndex = dataloader.selectedZanoteliSubjects
+    
+                        % Reset signal data and parameters
+                        dataloader.signals = cell2mat(dataloader.groupSignals(stimulusIndex,subjectIndex));
+                        dataloader.fs = size(dataloader.signals, 1);
+                        dataloader.nfft = dataloader.fs;
+                        dataloader.nBins = floor(dataloader.fs/2)+1;
+                        dataloader.zanoteliStimulusIndex = stimulusIndex;
+                        dataloader.zanoteliSubjectIndex = subjectIndex;
+    
+                        obj = obj.zanoteliPreProcessing(dataloader);
+    
+                        obj.groupProcessedSignals{stimulusIndex,subjectIndex} = obj.processedSignals;
+    
+                    end
+                end
+                
+
+            else
+                error('Invalid dataloader mode!')
+
             end
 
         end
