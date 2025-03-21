@@ -13,9 +13,9 @@ dtl = dtl.loadBulkEEGData();
 
 % Reset SIGNALS to filtered for display
 dtl = dtl.computeBulkFFTs(); % dtl.groupSignals = ppc.groupFilteredSignals;
-dtl.age;
+dtl.age();
 
-%% import parameters from Vaz 2024
+%% import parameters from Vaz 2024SS
 caminho = 'C:\Users\alexa\Desktop\Numero_Deteccoes_consecutiva_H\';
 vaz_data = load([caminho,'NDC_AlfaCorrigido_Mmax240_alfa_0.05_FPdesejado0.05.mat'], ...
     'alfa_corrigido', 'NDC_minimo','P', 'nRuns');
@@ -34,25 +34,25 @@ end
 % vaz_startWindows(find(K_stages >5)) = [];
 % vaz_windowSizes(find(K_stages >5)) = [];
 % 
-% vaz_windowSizes
+% vaz_windowSizesS
 
 vaz_translated_Kstages = flip(unique(K_stages));
-vaz_startWindows = 1:240; %240;
+vaz_startWindows = 1:30;
+% vaz_startWindows = 121:240;
 
 %%
 ordc = ORDCalculator(dtl).fit_epochs( ...
     stimulusIndices = dtl.selectedZanoteliStimuli,...
     subjectIndices = dtl.selectedZanoteliSubjects,...
     startWindows = vaz_startWindows, ... % windowStepSizes = 52, ...
-    K_stages = vaz_translated_Kstages(vaz_translated_Kstages<10),...
+    K_stages = vaz_translated_Kstages, ...
     single_or_bulk = 'bulk',...
     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
     ... % then, compute on selected channels:
     );
 
-
-disp('Epochs are computed')
+fprintf('\tEpochs are computed.\n')
 ordc.age()
 
 single_channel = 1;
@@ -165,3 +165,30 @@ confmat = table( ...
     100*mean(tp_rate(end,:)), ...
     100*mean(tn_rate(end,:)), ...
     'VariableNames',{'fn','fp','tp','tn'})
+
+tester_checkpoint = struct();
+tester_checkpoint.epochs = tester.epochs ;
+tester_checkpoint.groupTP = tester.groupTP;
+tester_checkpoint.groupTN = tester.groupTN;
+tester_checkpoint.groupFP = tester.groupFP;
+tester_checkpoint.groupFN = tester.groupFN;
+tester_checkpoint.previous_cgst_thresholds = tester.previous_cgst_thresholds;
+tester_checkpoint.allTestFrequencies = tester.allTestFrequencies;
+
+tester_checkpoint.selectedZanoteliSubjects = tester.dataloader.selectedZanoteliSubjects;
+tester_checkpoint.selectedZanoteliStimuli = tester.dataloader.selectedZanoteliStimuli;
+tester_checkpoint.epochs_index_metadata = tester.ord_calculator.epochs_index_metadata;
+
+tester_checkpoint.vaz_translated_Kstages = vaz_translated_Kstages;
+tester_checkpoint.vaz_startWindows = vaz_startWindows;
+
+
+[Y,MO,D,H,MI,S] = datevec(datetime);
+s = ['tester_checkpoint_1_T',...
+    num2str(H),'_',num2str(MI),'_',num2str(fix(S)),...
+    num2str(D),'_',num2str(MO),'_',num2str(Y),'.mat'];
+save(s,'tester_checkpoint','-v7.3')
+
+
+
+

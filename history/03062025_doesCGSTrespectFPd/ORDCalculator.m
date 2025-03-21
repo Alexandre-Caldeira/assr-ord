@@ -574,8 +574,8 @@ classdef ORDCalculator
 
         function age(obj)
             fprintf( ...
-                '\n\tThis ORDCalculator was built %0.2f seconds ago.\n\n', ...
-                round(toc(obj.timer),2))
+                '\n\t [%s] This ORDCalculator was built %0.2f seconds ago.\n\n', ...
+                datetime, round(toc(obj.timer),2))
         end
 
     end
