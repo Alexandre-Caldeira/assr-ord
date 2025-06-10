@@ -1,8 +1,8 @@
 classdef ORDTester 
     properties
         % Test Parameters     
-        NDC 
         desired_alpha
+        corrigir_alpha
         stageAlphas 
         stageGammas 
         previous_cgst_thresholds
@@ -139,7 +139,21 @@ classdef ORDTester
                             M = p.nWindows;
                             K = p.K_stages;
                             
-                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            Mmax = K*M;
+                            Mstep = p.nWindows;
+                            Mmin = min(current_epoch,[],'all');
+                            
+                            % [alfa_corrigido,~,~,~] =funcao_NDC_alfaCorrigido_Mmax(1e4,Mmax,obj.desired_alpha,obj.desired_alpha)
+                            % obj = obj.zanotelli_adjust_FP( ...
+                            %     Mmax = Mmax,...
+                            %     Mstep = Mstep, ...
+                            %     Mmin = Mmin);
+
+                            obj = obj.single_exam_beta_cgst_threshold(M,K, ...
+                                corrigir_alpha = obj.corrigir_alpha ,...
+                                Mmax = Mmax,...
+                                Mstep = Mstep, ...
+                                Mmin = Mmin);
                             % obj = obj.patient_beta_cgst_threshold(M,K);
                             
                             obj.groupStageAlphas{epoch_idx} = obj.stageAlphas;
@@ -151,8 +165,21 @@ classdef ORDTester
             end
         end
 
-        function obj = single_exam_beta_cgst_threshold(obj,M,K)
+        
+        
+        function obj = single_exam_beta_cgst_threshold(obj,M,K,p)
+            arguments
+                obj
+                M
+                K
 
+                p.corrigir_alpha = obj.corrigir_alpha
+                p.Mmin
+                p.Mstep
+                p.Mmax
+                
+            end
+            
     
             if M<=size(obj.previous_cgst_thresholds,1) ...
                     && K<=size(obj.previous_cgst_thresholds,2)
@@ -163,6 +190,11 @@ classdef ORDTester
                     obj.stageGammas = check_previous(2,:);
                     return
                 end
+            end
+
+            if p.corrigir_alpha ~= 0
+                obj = obj.zanotelli_adjust_FP( Mmax = p.Mmax,...
+                                Mstep = p.Mstep, Mmin = p.Mmin);
             end
             
             alpha           = obj.desired_alpha;                        
@@ -298,10 +330,12 @@ classdef ORDTester
                 p.subjectIndices = obj.ord_calculator.subjectIndices;
                 p.stimulusIndices = obj.ord_calculator.stimulusIndices; 
                 p.epochs = obj.ord_calculator.epochs;
+                p.corrigir_alpha = 0;
                                 
             end
             % warning('Test pending')
             
+           obj.corrigir_alpha = p.corrigir_alpha;
             % obj.parameterizedMSC
            obj.groupDecisions = cell(size(p.epochs));
            obj.groupTP = cell(size(p.epochs));
@@ -349,13 +383,32 @@ classdef ORDTester
                             M = current_epoch(end) - current_epoch(end-1)+1;
                             K = p.K_stages;
 
+                            % Mmax = size(obj.ord_calculator.MSC,2);
+                            % Mstep = p.nWindows;
+                            % Mmin = min(current_epoch,[],'all');
+                            % 
+                            % % [alfa_corrigido,~,~,~] =funcao_NDC_alfaCorrigido_Mmax(1e4,Mmax,obj.desired_alpha,obj.desired_alpha)
+                            % obj = obj.zanotelli_adjust_FP( ...
+                            %     Mmax = Mmax,...
+                            %     Mstep = Mstep, ...
+                            %     Mmin = Mmin);
+
                             obj.latest_windowSize = M;
                             obj.latest_K = K;
 
                             % obj = obj.single_exam_beta_cgst_threshold(M,K);
                             % obj = obj.patient_beta_cgst_threshold(M,K);
                             % t = tic();
-                            obj = obj.single_exam_beta_cgst_threshold(M,K);
+                            Mmax = current_epoch(end);
+                            Mstep = p.nWindows;
+                            Mmin = min(current_epoch,[],'all');
+                            
+
+                            obj = obj.single_exam_beta_cgst_threshold(M,K, ...
+                                corrigir_alpha = obj.corrigir_alpha ,...
+                                Mmax = Mmax,...
+                                Mstep = Mstep, ...
+                                Mmin = Mmin);
                             % if K>10
                             %     disp(toc(t));
                             % end
@@ -374,6 +427,78 @@ classdef ORDTester
                 end
            end
         end
+
+        function obj = zanotelli_adjust_FP(obj,p)
+            arguments
+                obj
+
+                p.Mmin =1;
+                p.Mstep = 2;
+                p.nRuns  = 1000;
+                p.Mmax = 20; %número máximo de janela
+                p.alfa_teste = 0.05;
+                p.FP_desejado =0.05;
+            end
+            
+            %parâmetros defaul
+            % fs = 64;
+            tj = 32; %cada janela um segundo
+            bin = 8;
+            
+            
+            Ntotal = p.Mmax*tj; %número de pontos totais
+            
+            %Na simulação iremos estimar a aplicação do detector a cada janela
+            ord = zeros(p.nRuns,p.Mmax); %armazena os valores dos detectores a cada experimento.
+            
+            for ii = 1: p.nRuns
+                x = randn(Ntotal,1);
+                x = reshape(x,tj,p.Mmax); %dividir em janelas
+                %aplicar o detector a cada janela ------------------
+                xfft = fft(x); %aplico uma ´única vez a FFT.
+                for M = 2:p.Mmax %fazer para cada acrescimo de uma janela
+                    ord(ii,M) = msc_fft(xfft(bin,1:M),M);
+                end
+            end
+
+            Ninicial=1; 
+            [NDC,~]  = estimarNDC(Ninicial,p.alfa_teste,p.FP_desejado, ord, p.Mmin,p.Mstep, p.Mmax);
+            % NDC_minimo = NDC;
+            % NDC_minimo = 1;
+            
+            %ajustar os valores crítico
+            MM = p.Mmin:p.Mstep:p.Mmax;
+            options = optimset('MaxIter', 50);
+            cc = @(alfa) funcao_custo_v2(alfa, NDC, MM, ord, p.FP_desejado);
+            [alfa, ~] = fmincg(cc,p.alfa_teste, options);
+            obj.desired_alpha = alfa;
+
+        end
+        %     epoch = linspace()
+        %     Mmax = obj.
+        %     P = parametros_protocolo(Mmax);
+        %     alfa_corrigido = nan*ones(size(P,1),1);
+        %     cost_alfa = nan*ones(size(P,1),1);
+        % 
+        %     for ii = 1:size(P,1)
+        %         Mmin = P(ii,1);
+        %         Mstep = P(ii,2); 
+        %         Mmax = P(ii,3);
+        %         MM = Mmin:Mstep:Mmax;
+        %         disp([num2str(ii*100/size(P,1)),'%'])
+        % 
+        %         det = ord(:,MM);
+        %         alfa = 0.05;  %TAXA DE FALSO POSITIVO DE CADA TESTES
+        %         options = optimset('MaxIter', 50);
+        %         cc = @(alfa) funcao_custo(alfa ,MM, det, FP_desejado);                               
+        %         [alfa, cost] = fmincg(cc,alfa, options);
+        %         alfa_corrigido(ii) = alfa; 
+        % 
+        %         if ~isempty(cost)
+        %             cost_alfa(ii) = cost(end);
+        %         end
+        %     end
+        % end
 
 
         function obj = compute_bulk_sim_beta_cgst_decisions(obj,p)
@@ -439,6 +564,15 @@ classdef ORDTester
                     end
                 end
            end
+        end
+
+        function obj = compute_zanoteli_ndc_decisions()
+        end
+
+        function obj = compute_bazoni_ndc_decisions()
+        end
+
+        function obj = compute_antunes_ndc_decisions()
         end
         
         function obj = compute_beta_cgst_decisions(obj, p)
@@ -513,13 +647,13 @@ classdef ORDTester
 
         end
 
-        function obj = compute_chesnaye_thresholds(obj)
-            error('Implementation pending')
-        end
-
-        function obj = compute_zanoteli_thresholds(obj)
-            error('Implementation pending')
-        end
+        % function obj = compute_chesnaye_thresholds(obj)
+        %     error('Implementation pending')
+        % end
+        % 
+        % function obj = compute_zanoteli_thresholds(obj)
+        %     error('Implementation pending')
+        % end
 
         % UTILS
         function age(obj)
