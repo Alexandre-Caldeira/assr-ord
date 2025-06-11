@@ -226,11 +226,11 @@ close all
 tp_rate2 = tp_rate(tp_rate>0);
 minimal_detection_time2 = minimal_detection_time(tp_rate>0);
 tp_rate2 =tp_rate2(~isnan(minimal_detection_time2));
-minimal_detection_time2 = minimal_detection_time2(~isnan(minimal_detection_time2));
+minimal_detection_time2 = minimal_detection_time2(~i)
 % tp_rate2(isnan(minimal_detection_time2)) = [];
 % tp_rate2(isnan(tp_rate2)) = [];
-%%
-% figure(3)
+
+figure(3)
 [p, idxs] = paretoFront([-100*tp_rate2,minimal_detection_time2] );
 % auxL = p(:,1)<0.5; 
 % p(auxL,:) = [];

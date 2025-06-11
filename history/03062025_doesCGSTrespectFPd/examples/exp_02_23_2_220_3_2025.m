@@ -2,7 +2,7 @@
 clearvars; close all; clc;
 
 % Load object with default exam and reset data
-dtl = DataLoader('exp', 'C:\Users\alexa\Desktop\Sinais_EEG\');
+dtl = DataLoader('exp');%, 'C:\Users\alexa\Desktop\Sinais_EEG\');
 
 dtl.selectedZanoteliSubjects = 1:11; %:numel(dtl.zanoteliSubjects);
 dtl.selectedZanoteliStimuli = 5; % 1:numel(dtl.zanoteliStimulusNames)-1; % -1 to remove 'ESP'

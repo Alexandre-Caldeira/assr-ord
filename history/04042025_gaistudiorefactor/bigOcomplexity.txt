@@ -1,0 +1,121 @@
+Okay, let's break down the Big O complexity analysis for the simulation and experiment runners.
+
+Assumptions:
+
+FFT Dominance: We assume the Fast Fourier Transform (FFT) within calculateMSC is a major contributor, with complexity roughly O(N log N) where N is the signal length (fs).
+
+Threshold Caching: We assume the thresholdCache in ORDTester is effective. The expensive threshold calculation O(K * R * log R) (where R is Resolution) happens only once for each unique (M, K, alpha) combination encountered across the entire run. Let U_MK be the number of unique (M, K) pairs.
+
+Map Operations: Average time complexity for hash map (containers.Map) operations (insertion, lookup) is assumed to be O(1).
+
+Preprocessing: Preprocessing steps (applyZanoteliPreprocessing, applyAntunesFiltering) are generally linear or near-linear with respect to the total number of samples. Let T = max(duration) * fs. Preprocessing complexity is roughly O(T * C * Fo) where C is channels and Fo is filter order (if used), or simpler O(T*C) if filtering is cheap/off.
+
+Constants: fs (sampling rate), C (number of channels), F (number of test frequencies), R (Resolution for thresholds), Fo (Filter Order) are treated as constants or factors that don't scale with the number of iterations defined by the main parameters.
+
+Parameter Definitions:
+
+Simulation (sim_runner.m):
+
+D: Number of sim_durations (numel(config.sim_durations))
+
+NM: Number of sim_noiseMeans (numel(config.sim_noiseMeans))
+
+NS: Number of sim_noiseStds (numel(config.sim_noiseStds))
+
+SW: Number of ord_startWindows (numel(config.ord_startWindows))
+
+K: Number of ord_K_stages (numel(config.ord_K_stages)) - Technically, Kmax is the max value, but using K for simplicity in Big O.
+
+N_sim_params = D * NM * NS (Total number of unique simulation parameter sets)
+
+N_ord_params = SW * K (Total number of unique ORD parameter sets)
+
+N_iter_sim = N_sim_params * N_ord_params (Total number of iterations in runSimulationBatch)
+
+T = max(config.sim_durations) * fs (Max number of samples per channel per simulation run)
+
+Experiment (exp_runner.m):
+
+Sub: Number of subjects (numel(config.subjects))
+
+Stim: Number of stimuli (numel(config.stimuli))
+
+SW: Number of ord_startWindows (numel(config.ord_startWindows))
+
+K: Number of ord_K_stages (numel(config.ord_K_stages))
+
+N_exp_files = Sub * Stim (Total number of unique experiment files to process)
+
+N_ord_params = SW * K (Total number of unique ORD parameter sets)
+
+N_iter_exp = N_exp_files * N_ord_params (Total number of iterations in runExperimentBatch)
+
+Tmax = Maximum number of samples per channel across all loaded experiment files.
+
+Complexity Analysis:
+
+1. runSimulationBatch (Cost per Iteration & Total)
+
+Outer Loops: Iterate N_sim_params times.
+
+Inside Sim Loops (per sim config):
+
+generateSimulation: O(T * C)
+
+Preprocessing: O(T * C * Fo) (or O(T*C))
+
+Inner ORD Loops (per ORD config): Iterate N_ord_params times within each sim config.
+
+calculateMSC: Dominant part is FFT. Loop C * K times. FFT is O(M * fs * log(fs)). M (window size) depends on K, dur, etc., but is proportional to dur in the worst case for fixedK. So, roughly O(C * K * dur * fs * log(fs)) = O(C * K * T * log(fs)).
+
+runBetaCGST: Decision logic is O(C * K * F). Threshold calculation is cached.
+
+Total Cost per Sim Run (one unique key in the output map):
+O(T*C*Fo + C*K*T*log(fs) + C*K*F)
+Dominated by MSC calculation: O(C * K * T * log(fs))
+
+Total Cost of runSimulationBatch:
+N_iter_sim * O(C * K * T * log(fs)) + U_MK * O(K * R * log R)
+Simplified: O(D * NM * NS * SW * K^2 * C * T * log(fs)) (ignoring the amortized threshold cost, assuming MSC dominates)
+
+2. runExperimentBatch (Cost per Iteration & Total)
+
+Outer Loops: Iterate N_exp_files times.
+
+Inside File Loops (per file):
+
+loadExperiment: O(Tmax * C) (loading data)
+
+Preprocessing: O(Tmax * C * Fo)
+
+Inner ORD Loops (per ORD config): Iterate N_ord_params times within each file.
+
+calculateMSC: O(C * K * Tmax * log(fs)) (using Tmax)
+
+runBetaCGST: O(C * K * F) + cached threshold cost.
+
+Total Cost per File Processed:
+O(Tmax*C*Fo + N_ord_params * O(C * K * Tmax * log(fs)))
+Dominated by the inner loop: O(SW * K^2 * C * Tmax * log(fs))
+
+Total Cost of runExperimentBatch:
+N_exp_files * O(SW * K^2 * C * Tmax * log(fs)) + U_MK * O(K * R * log R)
+Simplified: O(Sub * Stim * SW * K^2 * C * Tmax * log(fs)) (ignoring the amortized threshold cost)
+
+Summary:
+
+Simulation: The complexity scales roughly linearly with the number of simulation parameter combinations (D * NM * NS), linearly with the number of start windows (SW), quadratically with the number of stages (K^2), linearly with channels (C), and slightly faster than linearly (T log fs) with the maximum signal duration/sampling rate (T).
+O(dur * NM * NS * SW * K^2 * C * max(dur) * fs * log(fs))
+
+Experiment: The complexity scales roughly linearly with the number of subjects (Sub) and stimuli (Stim), linearly with start windows (SW), quadratically with stages (K^2), linearly with channels (C), and slightly faster than linearly (Tmax log fs) with the maximum signal duration/sampling rate found across files (Tmax).
+O(Sub * Stim * SW * K^2 * C * Tmax * log(fs))
+
+Key Takeaways:
+
+The dominant factor is often the combination of the number of iterations (N_iter_sim or N_iter_exp) multiplied by the cost of calculateMSC.
+
+The complexity grows quadratically with K (number of stages) because K affects both the number of ORD iterations and the work done within calculateMSC and runBetaCGST. This is a critical scaling factor.
+
+The complexity grows linearly with most other parameters (number of simulations/subjects/stimuli, start windows, channels, signal duration).
+
+The threshold calculation cost O(K * R * log R) per unique (M, K) pair can become significant if Resolution (R) is very high or if the number of unique M values generated is large (less effective caching). The FFT optimization helps mitigate this cost per calculation.

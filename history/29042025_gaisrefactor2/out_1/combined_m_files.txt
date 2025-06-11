@@ -1,0 +1,2897 @@
+============================================================
+=== FILE START: CGST_BetaStrategy.m
+============================================================
+
+% --- FILE START: CGST_BetaStrategy.m ---
+classdef CGST_BetaStrategy < TestStrategy
+    % Implements the Chesnaye Group Sequential Test (CGST) strategy using
+    % thresholds derived from the Beta(1, M-1) distribution under H0 (MSC null distribution).
+    % Requires the Statistics and Machine Learning Toolbox for betapdf.
+
+    properties
+        RequiresFutilityThreshold = true % This strategy calculates both efficacy and futility bounds.
+
+        % Cache for thresholds to avoid re-computation. Key: 'K<k>_M<m>_a<a>'.
+        thresholdCache = containers.Map('KeyType', 'char', 'ValueType', 'any');
+
+        Name = 'CGST_Beta' % Strategy identifier
+    end
+
+    methods
+        function obj = CGST_BetaStrategy()
+            % Constructor - initializes the threshold cache.
+            obj.thresholdCache = containers.Map('KeyType', 'char', 'ValueType', 'any');
+            fprintf('CGST_BetaStrategy: Initialized. Requires Statistics Toolbox for betapdf.\n');
+        end
+
+        function thresholds = calculateThresholds(obj, strategyParams, analysisInfo)
+            % Calculates CGST efficacy (alpha) and futility (gamma) thresholds.
+            % Args:
+            %   strategyParams: Struct must contain .alpha (desired overall type I error).
+            %   analysisInfo: Struct must contain .K (number of stages) and .M (windows per stage).
+            %                 .M is assumed constant across stages for standard CGST.
+            % Returns:
+            %   thresholds: Struct with .efficacy and .futility threshold vectors (length K).
+
+            % --- Input Validation ---
+            if ~isfield(strategyParams, 'alpha') || ~isscalar(strategyParams.alpha) || strategyParams.alpha <= 0 || strategyParams.alpha >= 1
+                error('CGST_BetaStrategy: strategyParams must include a scalar alpha between 0 and 1.');
+            end
+            if ~isfield(analysisInfo, 'K') || ~isscalar(analysisInfo.K) || analysisInfo.K < 1 || floor(analysisInfo.K) ~= analysisInfo.K
+                 error('CGST_BetaStrategy: analysisInfo must include a positive integer K (number of stages).');
+            end
+            if ~isfield(analysisInfo, 'M') || ~isscalar(analysisInfo.M) || analysisInfo.M <= 1 || floor(analysisInfo.M) ~= analysisInfo.M
+                % Allow vector M but warn and use M(1) - standard CGST assumes constant M
+                 if isfield(analysisInfo, 'M') && isvector(analysisInfo.M) && numel(analysisInfo.M) == analysisInfo.K && all(analysisInfo.M > 1)
+                     warning('CGST_BetaStrategy: analysisInfo.M is a vector. Standard CGST assumes constant M. Using M=%d from the first stage for threshold calculation.', analysisInfo.M(1));
+                     M = analysisInfo.M(1);
+                 else
+                    error('CGST_BetaStrategy: analysisInfo must include a positive integer M > 1 (windows per stage). Vector M is not standard.');
+                 end
+            else
+                M = analysisInfo.M; % M is scalar and valid
+            end
+            K = analysisInfo.K;
+            alpha = strategyParams.alpha;
+
+            % --- Check Cache ---
+            cacheKey = sprintf('K%d_M%d_a%.6f', K, M, alpha); % Use more precision for alpha key
+            if isKey(obj.thresholdCache, cacheKey)
+                cachedData = obj.thresholdCache(cacheKey);
+                thresholds.efficacy = cachedData.a;
+                thresholds.futility = cachedData.g;
+                % fprintf('CGST_BetaStrategy: Loaded thresholds from cache for %s\n', cacheKey);
+                return;
+            end
+            fprintf('CGST_BetaStrategy: Calculating thresholds for %s...\n', cacheKey);
+
+            % --- Parameters for Calculation ---
+            aThresholds = zeros(1, K); % Efficacy thresholds
+            gThresholds = zeros(1, K); % Futility thresholds
+            Alpha_k = ones(1, K) * (alpha / K); % Equal alpha spending per stage
+            Gamma_k = ((1 - alpha) / K) * ones(1, K); % Equal gamma spending per stage
+
+            Resolution = 1e5; % Resolution for PDF approximation (higher is more accurate but slower)
+            Xvalues = linspace(0, 1, Resolution + 1); % Values from 0 to 1
+
+            % --- Base Null Distribution (Beta(1, M-1)) ---
+            try
+                Null = betapdf(Xvalues, 1, M - 1);
+                 % Handle potential NaN/Inf at boundaries (esp. if M is close to 1, though M>1 enforced)
+                 Null(isnan(Null) | isinf(Null)) = 0;
+                 if sum(Null) < eps
+                      error('CGST_BetaStrategy: Initial Beta(1, %d) PDF sum is near zero. Check parameters.', M-1);
+                 end
+                 Null = Null / sum(Null); % Normalize
+                 Chi2_Norm = Null; % Base distribution for convolution
+            catch ME
+                if contains(ME.identifier, 'stats') || contains(ME.message, 'Statistics')
+                    error('CGST_BetaStrategy: betapdf function from Statistics Toolbox is required but not found or errored: %s', ME.message);
+                else
+                    rethrow(ME); % Rethrow other errors
+                end
+            end
+
+            % --- Stage 1 Thresholds (Closed-form) ---
+            aThresholds(1) = 1 - Alpha_k(1)^(1 / (M - 1));
+            gThresholds(1) = 1 - (1 - Gamma_k(1))^(1 / (M - 1));
+            % Clamp thresholds to [0, 1] for safety
+            aThresholds(1) = max(0, min(1, aThresholds(1)));
+            gThresholds(1) = max(0, min(1, gThresholds(1)));
+
+            % Convert thresholds to indices for truncation (+1 for 1-based index)
+            TruncInd_Ra = floor(aThresholds(1) * Resolution) + 1;
+            TruncInd_Rg = floor(gThresholds(1) * Resolution) + 1;
+            % Clamp indices to valid range [1, Resolution+1]
+            TruncInd_Ra = min(TruncInd_Ra, Resolution + 1);
+            TruncInd_Rg = max(TruncInd_Rg, 1);
+
+            % --- Iterative Threshold Calculation (Stages 2 to K) ---
+            currentNull = Null; % PDF of the cumulative statistic at the start of the stage
+            prob_mass_carried_forward = 1.0;
+
+            for k = 2:K
+                % Truncate the distribution based on *previous* stage's boundaries
+                NullTrunc = currentNull;
+                if TruncInd_Ra <= numel(NullTrunc); NullTrunc(TruncInd_Ra:end) = 0; end
+                if TruncInd_Rg >= 1; NullTrunc(1:TruncInd_Rg) = 0; end
+
+                % Check if truncation eliminated all probability mass
+                sumTrunc = sum(NullTrunc);
+                if sumTrunc < eps
+                     warning('CGST_BetaStrategy: Null distribution truncated to zero before stage %d convolution. Thresholds for stage >= %d set to NaN. Check alpha/gamma allocation or M.', k, k);
+                     aThresholds(k:end) = NaN;
+                     gThresholds(k:end) = NaN;
+                     break; % Stop calculation
+                end
+                 NullTrunc = NullTrunc / sumTrunc; % Renormalize truncated part
+
+                % Convolve with the base distribution
+                % Length of result is length(A)+length(B)-1
+                Null2 = conv(Chi2_Norm, NullTrunc, 'full');
+                if sum(Null2) < eps
+                     warning('CGST_BetaStrategy: Convolution resulted in zero sum at stage %d. Thresholds for stage >= %d set to NaN.', k, k);
+                     aThresholds(k:end) = NaN;
+                     gThresholds(k:end) = NaN;
+                     break; % Stop calculation
+                end
+                Null2 = Null2 / sum(Null2); % Normalize convolution result
+
+
+                % Adjust total probability mass remaining for this stage's calculation
+                prob_mass_entering_stage_k = prob_mass_carried_forward * sumTrunc; % Mass that didn't stop at k-1
+                if prob_mass_entering_stage_k < eps
+                     warning('CGST_BetaStrategy: Probability mass entering stage %d is near zero. Thresholds for stage >= %d set to NaN.', k, k);
+                     aThresholds(k:end) = NaN;
+                     gThresholds(k:end) = NaN;
+                     break;
+                end
+
+                % Find new thresholds based on the PDF of the statistic *at stage k* (Null2)
+                cumulativeNull2 = cumsum(Null2);
+                % Target percentiles within the distribution of those *continuing* to stage k
+                targetAlphaPercentile = 1 - Alpha_k(k) / prob_mass_entering_stage_k;
+                targetGammaPercentile = Gamma_k(k) / prob_mass_entering_stage_k;
+
+                 % Clamp target percentiles to [0, 1] to avoid issues if spending exceeds remaining mass
+                 targetAlphaPercentile = max(0, min(1, targetAlphaPercentile));
+                 targetGammaPercentile = max(0, min(1, targetGammaPercentile));
+
+
+                % Find indices corresponding to these percentiles
+                idx_a = find(cumulativeNull2 >= targetAlphaPercentile, 1, 'first');
+                idx_g = find(cumulativeNull2 >= targetGammaPercentile, 1, 'first');
+
+                % Handle cases where find returns empty (e.g., percentile is 0 or 1 exactly)
+                convResolution = numel(Null2) - 1; % Effective resolution of the convolved PDF scale [0, convResolution]
+                if isempty(idx_a); idx_a = numel(Null2); end % If percentile is 1 (or > max), set to end
+                if isempty(idx_g); idx_g = 1; end % If percentile is 0 (or < min), set to start
+
+                % Convert indices back to thresholds [0, 1] scale
+                % The convolved scale is roughly [0, 2], so map index to [0, 1]
+                % A value at index `idx` corresponds to roughly `(idx-1)/convResolution` on the original scale
+                % Need to map the convolved scale back. The effective range of the sum of k vars each ~[0,1] is ~[0,k].
+                % Using the helper function findIndex logic from ORDTester might be more robust here if available,
+                % or carefully map the convolved index back to the [0,1] MSC scale.
+                % Approximation: Assume convolution stretches the scale linearly.
+                aThresholds(k) = (idx_a - 1) / convResolution; % This assumes the convolved PDF maps linearly to [0,1] scale, which is an approximation.
+                gThresholds(k) = (idx_g - 1) / convResolution;
+
+                 % Clamp thresholds and update indices for next iteration's truncation
+                 aThresholds(k) = max(0, min(1, aThresholds(k)));
+                 gThresholds(k) = max(0, min(1, gThresholds(k)));
+                 TruncInd_Ra = floor(aThresholds(k) * convResolution) + 1;
+                 TruncInd_Rg = floor(gThresholds(k) * convResolution) + 1;
+                  % Clamp indices
+                 TruncInd_Ra = min(TruncInd_Ra, convResolution + 1);
+                 TruncInd_Rg = max(TruncInd_Rg, 1);
+
+                 currentNull = Null2; % Update the distribution for the next stage
+                 prob_mass_carried_forward = prob_mass_entering_stage_k * (1 - targetGammaPercentile - (1-targetAlphaPercentile)); % Update remaining mass
+
+
+            end % End loop for stages k=2:K
+
+            thresholds.efficacy = aThresholds;
+            thresholds.futility = gThresholds;
+
+            % Cache the result
+            obj.thresholdCache(cacheKey) = struct('a', aThresholds, 'g', gThresholds);
+            fprintf('CGST_BetaStrategy: Threshold calculation complete and cached for %s.\n', cacheKey);
+        end
+
+
+        function [decisionSequence, stoppingStage] = runTest(obj, statSequence, thresholds)
+            % Runs the CGST test using cumulative MSC values.
+            % Args:
+            %   statSequence: MSC values (bins x stages x channels).
+            %   thresholds: Struct with .efficacy and .futility vectors (length K).
+            % Returns:
+            %   decisionSequence: Decisions (1=Detect, -1=Futility, 0=Continue) (bins x stages x channels).
+            %   stoppingStage: Stage number of decision (bins x channels).
+
+            if ~isfield(thresholds, 'efficacy') || ~isfield(thresholds, 'futility')
+                error('CGST_BetaStrategy: Threshold struct missing efficacy or futility fields.');
+            end
+            if isempty(statSequence); decisionSequence=[]; stoppingStage=[]; return; end
+
+            [nBins, K, nChannels] = size(statSequence);
+            aThresh = thresholds.efficacy(:)'; % Ensure row vector
+            gThresh = thresholds.futility(:)'; % Ensure row vector
+
+            if length(aThresh) ~= K || length(gThresh) ~= K
+                error('CGST_BetaStrategy: Threshold vector length (%d) does not match number of stages (%d)', length(aThresh), K);
+            end
+
+            decisionSequence = zeros(nBins, K, nChannels); % 0 = continue initially
+            stoppingStage = ones(nBins, nChannels) * K;    % Default: stops at last stage K
+
+            % --- Calculate Cumulative Statistic ---
+            % Assumes statSequence contains the *per-stage* statistic (e.g., MSC from stage k alone)
+            cumulativeStat = cumsum(statSequence, 2); % Accumulate across stages (dim 2)
+
+            % --- Apply Thresholds Stage by Stage ---
+            for chan = 1:nChannels
+                for freqBin = 1:nBins
+                    alreadyStopped = false;
+                    for k = 1:K
+                        if alreadyStopped
+                            % Carry forward the decision from the stopping stage
+                            decisionSequence(freqBin, k, chan) = decisionSequence(freqBin, k-1, chan);
+                            continue;
+                        end
+
+                        currentCumulative = cumulativeStat(freqBin, k, chan);
+
+                        % Check for NaN input -> NaN decision output
+                        if isnan(currentCumulative)
+                             decisionSequence(freqBin, k:K, chan) = NaN; % Propagate NaN decision
+                             stoppingStage(freqBin, chan) = k; % Mark stop stage
+                             alreadyStopped = true;
+                             continue;
+                        end
+
+                        % Check Efficacy Threshold
+                        if currentCumulative >= aThresh(k)
+                            decisionSequence(freqBin, k:K, chan) = 1; % Detect from this stage onwards
+                            stoppingStage(freqBin, chan) = k;
+                            alreadyStopped = true;
+                            continue; % Move to next freq/chan
+                        end
+
+                        % Check Futility Threshold
+                        if currentCumulative < gThresh(k)
+                            decisionSequence(freqBin, k:K, chan) = -1; % Futility from this stage onwards
+                            stoppingStage(freqBin, chan) = k;
+                            alreadyStopped = true;
+                            continue; % Move to next freq/chan
+                        end
+
+                        % If neither threshold crossed, decision remains 0 (Continue)
+                        % stoppingStage remains K until a decision is made or loop ends
+                    end % stage loop (k)
+                end % frequency loop (freqBin)
+            end % channel loop (chan)
+        end % runTest method
+    end % methods
+end % classdef
+
+
+============================================================
+=== FILE START: DataManager.m
+============================================================
+
+% --- FILE START: DataManager.m ---
+classdef DataManager
+    % Manages loading of experimental data or generation of simulated data.
+    % Stores metadata related to the data source.
+
+    properties
+        Mode            % 'sim' or 'exp': Specifies the data source type.
+        DataSourcePath  % Path for experimental data files or simulation config.
+        SavePath        % Path to save processed data or results.
+
+        % --- Experiment Specific Properties ---
+        ExpSubjects = {'Ab'; 'An'; 'Bb'; 'Er'; 'Lu'; 'So'; 'Qu'; 'Vi'; 'Sa'; 'Ti'; 'Wr'}; % Default subject list.
+        ExpStimuli = {'70dB'; '60dB'; '50dB'; '40dB'; '30dB'; 'ESP'}; % Default stimulus list.
+        ExpLeads = {'FC'; 'F4'; 'T6'; 'P4'; 'T4'; 'Oz'; 'C4'; 'T5'; 'P3'; 'F7'; 'F3'; 'T3'; 'C3'; 'Fz'; 'Pz'; 'Cz'}; % Default lead names.
+        ExpSuggestedMMax = [50; 50; 240; 440; 440; 20]; % Max windows suggested by Zanoteli per stimulus.
+
+        % --- Simulation Specific Properties ---
+        SimSignalFrequencies = [82 84 86 88 90 92 94 96]; % Freqs (Hz) for simulated signal components.
+        SimNoiseFrequencies = []; % Freqs (Hz) for noise components (can be auto-generated).
+        SimNoiseMean = -10; % Default SNR mean (dB) for simulation.
+        SimNoiseStd = 1;    % Default SNR standard deviation (dB) for simulation.
+        SimDuration = 60;   % Default simulation duration (seconds).
+
+        % --- Common Properties ---
+        Fs = 1000;          % Sampling frequency (Hz). Assumed default, updated on data load.
+        SelectedChannels = 1:16; % Indices of EEG channels to use.
+
+        % --- Internal State ---
+        rawTimeSeries % Cell array: {stimulus_idx/mean_idx, subject_idx/std_idx} -> data(sample, window, channel)
+        currentExamTimeSeries % Temp storage for single loaded/generated exam data.
+        isBulkLoaded = false % Flag indicating if bulk data is currently loaded.
+        loadedStimulusIndices = [] % Indices of stimuli loaded in bulk mode.
+        loadedSubjectIndices = []  % Indices of subjects loaded in bulk mode.
+        simNoiseMeans = [] % Noise means used in bulk simulation.
+        simNoiseStds = []  % Noise stds used in bulk simulation.
+    end
+
+    methods
+        function obj = DataManager(mode, dataSourcePath, savePath)
+            % Constructor for DataManager.
+            % Args:
+            %   mode: 'sim' or 'exp'.
+            %   dataSourcePath: Path to experimental data or simulation settings.
+            %   savePath: Path for saving results. Defaults to current directory.
+            arguments
+                mode {mustBeMember(mode, {'sim', 'exp'})}
+                dataSourcePath string = ''
+                savePath string = pwd % Default to current directory
+            end
+            obj.Mode = mode;
+            obj.DataSourcePath = dataSourcePath;
+            obj.SavePath = savePath;
+
+            % Auto-generate noise frequencies for simulation if not provided
+            if strcmp(obj.Mode, 'sim') && isempty(obj.SimNoiseFrequencies) && ~isempty(obj.SimSignalFrequencies)
+                try
+                    nNoise = numel(obj.SimSignalFrequencies);
+                    poolSize = 200; % Size of the pool to draw from
+                    freqStart = 300; % Starting frequency for noise pool
+                    if poolSize >= nNoise
+                       obj.SimNoiseFrequencies = freqStart + randperm(poolSize, nNoise);
+                       fprintf('DataManager: Generated %d random noise frequencies (from %d Hz pool).\n', nNoise, freqStart);
+                    else
+                       warning('DataManager: Pool size (%d) is smaller than required noise frequencies (%d). Using replacement.', poolSize, nNoise);
+                       obj.SimNoiseFrequencies = freqStart + randi(poolSize, 1, nNoise) -1; % Use replacement
+                    end
+                catch ME
+                     warning('DataManager: Failed to auto-generate noise frequencies. %s',ME.message);
+                end
+            end
+        end
+
+        % --- Load Experimental Data Methods ---
+        function obj = loadSingleExperiment(obj, subjectIdx, stimulusIdx)
+            % Loads data for a single subject and stimulus.
+            % Updates obj.currentExamTimeSeries and obj.Fs.
+            if ~strcmp(obj.Mode, 'exp')
+                error('DataManager: Cannot load experiment in simulation mode.');
+            end
+            if isempty(obj.DataSourcePath)
+                error('DataManager: Experimental data source path is not set.');
+            end
+            if subjectIdx < 1 || subjectIdx > numel(obj.ExpSubjects) || stimulusIdx < 1 || stimulusIdx > numel(obj.ExpStimuli)
+                error('DataManager: Invalid subject or stimulus index.');
+            end
+
+            subjectID = obj.ExpSubjects{subjectIdx};
+            stimulusName = obj.ExpStimuli{stimulusIdx};
+            fileName = [subjectID, stimulusName, '.mat'];
+            filePath = fullfile(obj.DataSourcePath, fileName);
+
+            try
+                % Assuming .mat file contains 'x' (data) and 'Fs' (sampling rate)
+                data = load(filePath, 'x', 'Fs');
+                if ~isfield(data,'x') || ~isfield(data,'Fs')
+                    error('DataManager: Loaded file %s missing required variables "x" or "Fs".', fileName);
+                end
+                obj.currentExamTimeSeries = data.x;
+                obj.Fs = data.Fs; % Update Fs based on loaded data
+                fprintf('DataManager: Loaded data for Subject %d (%s), Stimulus %d (%s). Fs = %d Hz.\n', ...
+                        subjectIdx, subjectID, stimulusIdx, stimulusName, obj.Fs);
+                obj.isBulkLoaded = false;
+                obj.rawTimeSeries = {}; % Clear bulk data
+            catch ME
+                warning('DataManager: Failed to load file: %s\n  Error: %s', filePath, ME.message);
+                obj.currentExamTimeSeries = []; % Indicate failure
+            end
+        end
+
+        function obj = loadBulkExperiments(obj, subjectIndices, stimulusIndices)
+            % Loads data for multiple subjects and stimuli specified by indices.
+            % Stores data in obj.rawTimeSeries.
+            if ~strcmp(obj.Mode, 'exp')
+                error('DataManager: Cannot load experiments in simulation mode.');
+            end
+            if isempty(obj.DataSourcePath)
+                error('DataManager: Experimental data source path is not set.');
+            end
+            if any(subjectIndices < 1) || any(subjectIndices > numel(obj.ExpSubjects)) || ...
+               any(stimulusIndices < 1) || any(stimulusIndices > numel(obj.ExpStimuli))
+                error('DataManager: Invalid subject or stimulus indices provided for bulk load.');
+            end
+
+            maxSubjIdx = max(subjectIndices);
+            maxStimIdx = max(stimulusIndices);
+            obj.rawTimeSeries = cell(maxStimIdx, maxSubjIdx); % Use max index for sizing
+
+            fprintf('DataManager: Loading bulk experimental data...\n');
+            loadedFs = []; % To check Fs consistency
+
+            for stimIdx = stimulusIndices(:)' % Ensure row vector
+                for subjIdx = subjectIndices(:)' % Ensure row vector
+                    subjectID = obj.ExpSubjects{subjIdx};
+                    stimulusName = obj.ExpStimuli{stimIdx};
+                    fileName = [subjectID, stimulusName, '.mat'];
+                    filePath = fullfile(obj.DataSourcePath, fileName);
+
+                    try
+                        data = load(filePath, 'x', 'Fs');
+                         if ~isfield(data,'x') || ~isfield(data,'Fs')
+                            error('DataManager: File %s missing "x" or "Fs".', fileName);
+                        end
+                        obj.rawTimeSeries{stimIdx, subjIdx} = data.x;
+
+                        % Check Fs consistency
+                        if isempty(loadedFs)
+                            loadedFs = data.Fs;
+                            obj.Fs = loadedFs; % Set Fs from first loaded file
+                        elseif data.Fs ~= loadedFs
+                             warning('DataManager: Inconsistent sampling rate found (File: %s, Fs=%d, Expected=%d). Using Fs=%d.', ...
+                                     fileName, data.Fs, loadedFs, loadedFs);
+                        end
+
+                        fprintf('  Loaded: Subject %d (%s), Stimulus %d (%s)\n', subjIdx, subjectID, stimIdx, stimulusName);
+                    catch ME
+                        warning('  Failed to load: Subject %d (%s), Stimulus %d (%s)\n  Error: %s', subjIdx, subjectID, stimIdx, stimulusName, ME.message);
+                        obj.rawTimeSeries{stimIdx, subjIdx} = []; % Mark as failed/empty
+                    end
+                end
+            end
+            obj.isBulkLoaded = true;
+            obj.currentExamTimeSeries = []; % Clear single exam data
+            obj.loadedStimulusIndices = stimulusIndices;
+            obj.loadedSubjectIndices = subjectIndices;
+            fprintf('DataManager: Bulk loading complete. Fs = %d Hz.\n', obj.Fs);
+        end
+
+        % --- Generate Simulated Data Methods ---
+        function obj = generateSingleSimulation(obj, p)
+            % Generates a single simulated dataset based on parameters.
+            % Stores result in obj.currentExamTimeSeries.
+             arguments
+                obj
+                p.duration double = obj.SimDuration
+                p.noiseMean double = obj.SimNoiseMean
+                p.noiseStd double = obj.SimNoiseStd
+                p.signalFreqs double = obj.SimSignalFrequencies
+                p.numChannels double = numel(obj.SelectedChannels)
+                p.fs double = obj.Fs
+            end
+            if ~strcmp(obj.Mode, 'sim')
+                error('DataManager: Cannot generate simulation in experimental mode.');
+            end
+
+            % --- Generate Base Signal ---
+            totalSamplesPerChannel = round(p.fs * p.duration); % Ensure integer samples
+            if totalSamplesPerChannel <= 0; error('DataManager: Duration results in non-positive sample count.'); end
+            t = (0:totalSamplesPerChannel-1) / p.fs;
+
+            signalBase = zeros(1, totalSamplesPerChannel);
+            if ~isempty(p.signalFreqs)
+                for freq = p.signalFreqs(:)' % Ensure row vector
+                    signalBase = signalBase + sin(2*pi*freq*t);
+                end
+            else
+                 fprintf('DataManager: No signal frequencies provided for simulation.\n');
+            end
+
+
+            % --- Apply Noise per Epoch (window) and Channel ---
+            % Assume 1 epoch = 1 second = p.fs samples
+            numEpochs = floor(totalSamplesPerChannel / p.fs);
+            if numEpochs == 0; error('DataManager: Duration too short for any full epochs (1s).'); end
+             samplesToUse = numEpochs * p.fs; % Use only full epochs
+
+            simSignals = zeros(p.fs, numEpochs, p.numChannels); % samples_per_epoch x num_epochs x num_channels
+            snrFun = @() p.noiseMean + p.noiseStd * randn();
+
+            for chan = 1:p.numChannels
+                % Reshape the base signal corresponding to full epochs
+                 signalForEpochs = reshape(signalBase(1:samplesToUse), [p.fs, numEpochs]);
+
+                for epoch = 1:numEpochs
+                    epochSignal = signalForEpochs(:, epoch);
+                    snr_dB = snrFun();
+                    % AWGN adds noise based on signal power and desired SNR
+                    noisySignal = awgn(epochSignal, snr_dB, 'measured', 'db');
+                    % Scale to microvolts (typical EEG range)
+                    simSignals(:, epoch, chan) = (10^-6) * noisySignal;
+                end
+            end
+            obj.currentExamTimeSeries = simSignals;
+            obj.isBulkLoaded = false;
+            obj.rawTimeSeries = {};
+             fprintf('DataManager: Generated single simulation (%d epochs, %d chan, Target SNR mean=%.1f dB).\n',...
+                     numEpochs, p.numChannels, p.noiseMean);
+         end
+
+         function obj = generateBulkSimulations(obj, groupNoiseMeans, groupNoiseStds, p)
+            % Generates multiple simulations varying noise parameters.
+            % Stores results in obj.rawTimeSeries.
+             arguments
+                 obj
+                 groupNoiseMeans double
+                 groupNoiseStds double
+                 p.duration double = obj.SimDuration
+                 p.signalFreqs double = obj.SimSignalFrequencies
+                 p.numChannels double = numel(obj.SelectedChannels)
+                 p.fs double = obj.Fs
+             end
+              if ~strcmp(obj.Mode, 'sim')
+                error('DataManager: Cannot generate simulations in experimental mode.');
+              end
+
+            numMeans = numel(groupNoiseMeans);
+            numStds = numel(groupNoiseStds);
+            obj.rawTimeSeries = cell(numMeans, numStds);
+
+            fprintf('DataManager: Generating bulk simulation data (%d Means x %d Stds)...\n', numMeans, numStds);
+            totalSims = numMeans * numStds;
+            simCount = 0;
+
+            for i = 1:numMeans
+                meanVal = groupNoiseMeans(i);
+                for j = 1:numStds
+                    stdVal = groupNoiseStds(j);
+                    simCount = simCount + 1;
+                    % Generate a single simulation with these noise parameters
+                    obj = obj.generateSingleSimulation(...
+                        'duration', p.duration, ...
+                        'noiseMean', meanVal, ...
+                        'noiseStd', stdVal, ...
+                        'signalFreqs', p.signalFreqs, ...
+                        'numChannels', p.numChannels, ...
+                        'fs', p.fs);
+                    % Store the generated data in the bulk cell array
+                    obj.rawTimeSeries{i, j} = obj.currentExamTimeSeries;
+                    fprintf('  Generated Sim %d/%d: Mean=%.1f, Std=%.1f\n', simCount, totalSims, meanVal, stdVal);
+                end
+            end
+            obj.isBulkLoaded = true;
+            obj.currentExamTimeSeries = []; % Clear single exam temp storage
+            obj.simNoiseMeans = groupNoiseMeans;
+            obj.simNoiseStds = groupNoiseStds;
+            fprintf('DataManager: Bulk simulation generation complete.\n');
+         end
+
+         % --- Utility and Data Access Methods ---
+         function data = getTimeSeries(obj, idx1, idx2)
+             % Returns data for a specific exam from the bulk-loaded set.
+             % idx1: stimulus index (exp) or noise mean index (sim)
+             % idx2: subject index (exp) or noise std index (sim)
+             if ~obj.isBulkLoaded
+                 warning('DataManager: Bulk data not loaded. Returning currentExamTimeSeries if available.');
+                 data = obj.currentExamTimeSeries;
+                 return;
+             end
+             if idx1 >= 1 && idx1 <= size(obj.rawTimeSeries, 1) && idx2 >= 1 && idx2 <= size(obj.rawTimeSeries, 2)
+                 data = obj.rawTimeSeries{idx1, idx2};
+             else
+                 warning('DataManager: Indices (%d, %d) out of bounds for loaded bulk data [%d x %d].', ...
+                         idx1, idx2, size(obj.rawTimeSeries, 1), size(obj.rawTimeSeries, 2));
+                 data = [];
+             end
+         end
+
+         function bulkData = getBulkTimeSeries(obj)
+             % Returns the entire cell array of bulk-loaded raw data.
+             if ~obj.isBulkLoaded
+                 warning('DataManager: Bulk data not loaded. Returning empty cell.');
+                 bulkData = {};
+             else
+                bulkData = obj.rawTimeSeries;
+             end
+         end
+
+         function [stimIndices, subjIndices] = getLoadedIndices(obj)
+             % Returns the indices used during the last bulk load/generation.
+             if ~obj.isBulkLoaded
+                  stimIndices = []; subjIndices = [];
+                  warning('DataManager: No bulk data loaded, returning empty indices.');
+             elseif strcmp(obj.Mode,'exp')
+                 stimIndices = obj.loadedStimulusIndices;
+                 subjIndices = obj.loadedSubjectIndices;
+             else % sim
+                 stimIndices = 1:numel(obj.simNoiseMeans); % Represent mean index
+                 subjIndices = 1:numel(obj.simNoiseStds); % Represent std index
+             end
+         end
+
+         function nBins = getNumBins(obj)
+            % Calculate number of FFT bins (positive frequencies).
+            nBins = floor(obj.Fs / 2) + 1;
+         end
+
+         function nfft = getNFFT(obj)
+             % Number of FFT points (often equal to Fs for 1-sec resolution).
+             nfft = obj.Fs;
+         end
+
+         function Mmax = getSuggestedMMax(obj, stimulusIdx)
+             % Returns the suggested Mmax for a given experimental stimulus index.
+             if strcmp(obj.Mode, 'exp') && stimulusIdx >= 1 && stimulusIdx <= numel(obj.ExpSuggestedMMax)
+                 Mmax = obj.ExpSuggestedMMax(stimulusIdx);
+             else
+                 Mmax = []; % Not applicable or index out of range
+             end
+         end
+
+    end % methods
+end % classdef
+
+
+============================================================
+=== FILE START: ETSStrategy.m
+============================================================
+
+% --- FILE START: ETSStrategy.m ---
+classdef ETSStrategy < TestStrategy
+    % Implements the Early Termination Strategy (ETS) based on consecutive
+    % detections (NDC) and optionally a futility criterion (Pnv - Possible Non-detection Value).
+
+    % Note: The abstract 'TestStrategy' class defines 'RequiresFutilityThreshold' as abstract.
+    %       We implement it here but remove specific validation attributes like (1,1) logical
+    %       to avoid conflict with the abstract definition.
+
+    properties
+        % Implementing the abstract property from TestStrategy:
+        RequiresFutilityThreshold % Boolean. Value assigned in constructor. <<< VALIDATION REMOVED
+
+        % Properties specific to this concrete class:
+        UseFutility (1,1) logical % Flag to control Pnv logic. Validated here.
+        Name                % Strategy name set dynamically.
+    end
+
+     methods
+        function obj = ETSStrategy(useFutility)
+            % Constructor: Sets whether to use the futility criterion.
+            arguments
+                 useFutility logical = false % Default to original ETS (NDC only).
+            end
+            obj.UseFutility = useFutility;
+
+            % Assign value to the implemented abstract property:
+            obj.RequiresFutilityThreshold = useFutility; % <<< Value assignment
+
+            % Set the Name based on the flag
+            if useFutility
+                 obj.Name = 'ETS_Pnv'; % Name for ETS with Possible non-detection value
+            else
+                 obj.Name = 'ETS_NDC'; % Name for ETS with only NDC criterion
+            end
+             fprintf('%s: Initialized (UseFutility=%d).\n', obj.Name, obj.UseFutility);
+        end
+
+        function thresholds = calculateThresholds(obj, strategyParams, analysisInfo)
+             % Calculates/retrieves thresholds for the ETS strategy.
+             % Args:
+             %   strategyParams: Struct must contain .alpha (per-test significance), .NDC (consecutive detections needed).
+             %                   If obj.UseFutility=true, must also contain .VC_not (futility thresholds indexed by M).
+             %   analysisInfo: Struct must contain .MM (vector of window counts, M, for each test point/stage).
+             % Returns:
+             %   thresholds: Struct with .detection (vector), .futility (vector or []), .NDC (scalar).
+
+             % --- Input Validation ---
+             if ~isfield(strategyParams, 'alpha') || ~isscalar(strategyParams.alpha) || strategyParams.alpha <= 0 || strategyParams.alpha >= 1
+                 error('%s: strategyParams must include a scalar alpha between 0 and 1.', obj.Name);
+             end
+             if ~isfield(strategyParams, 'NDC') || ~isscalar(strategyParams.NDC) || strategyParams.NDC < 1 || floor(strategyParams.NDC) ~= strategyParams.NDC
+                 error('%s: strategyParams must include a positive integer NDC >= 1.', obj.Name);
+             end
+             if ~isfield(analysisInfo, 'MM') || ~isvector(analysisInfo.MM) || isempty(analysisInfo.MM) || any(analysisInfo.MM < 1)
+                  error('%s: analysisInfo must include a non-empty vector MM of positive window counts (M values).', obj.Name);
+             end
+              % Validate VC_not presence only if futility is enabled
+              if obj.UseFutility % Check obj property, not just input flag
+                   if ~isfield(strategyParams, 'VC_not') || ~isvector(strategyParams.VC_not) || isempty(strategyParams.VC_not)
+                       error('%s: Futility enabled (UseFutility=true), but strategyParams.VC_not vector is missing or empty.', obj.Name);
+                   end
+              end
+
+             MM = analysisInfo.MM;
+             if iscolumn(MM); MM = MM'; end % Ensure row vector for consistency
+             alpha = strategyParams.alpha;
+             K = numel(MM); % Number of stages/test points
+
+             % --- Calculate Detection Thresholds (VC_MSC logic) ---
+             VC_detection = nan(1, K); % Initialize with NaN
+             for i = 1:K
+                 m_val = MM(i);
+                 if m_val > 1
+                     VC_detection(i) = 1 - alpha^(1 / (m_val - 1));
+                      VC_detection(i) = max(0, min(1, VC_detection(i))); % Clamp to [0, 1]
+                 else
+                     VC_detection(i) = NaN; % Threshold for M=1 undefined
+                     warning('%s:calculateThresholds', 'Detection threshold undefined for M=1 at stage %d. Set to NaN.', obj.Name, i);
+                 end
+             end
+             thresholds.detection = VC_detection;
+             thresholds.NDC = strategyParams.NDC;
+
+             % --- Include Futility Thresholds (if enabled) ---
+             if obj.UseFutility % Check obj property
+                 VC_not_full = strategyParams.VC_not;
+                 max_MM = max(MM(~isnan(MM))); % Max M needed, ignore NaNs in MM if any
+                 if isempty(max_MM) % Handle case where all MM are NaN
+                     warning('%s:calculateThresholds', 'Cannot determine max M for VC_not check as all MM values are NaN.', obj.Name);
+                     thresholds.futility = nan(1, K); % Set futility thresholds to NaN
+                 elseif numel(VC_not_full) < max_MM
+                     error('%s: Provided VC_not vector length (%d) is less than the maximum valid M required (%d).', obj.Name, numel(VC_not_full), max_MM);
+                 else
+                     try
+                         % Extract futility thresholds corresponding to the M values used at each stage
+                         % Handle potential NaN M values gracefully
+                         valid_MM_indices = ~isnan(MM);
+                         thresholds.futility = nan(1, K); % Initialize with NaN
+                         valid_MM_values = MM(valid_MM_indices); % Get only the valid M values
+                         % Ensure M values are valid indices for VC_not_full
+                         if any(valid_MM_values < 1) || any(valid_MM_values > numel(VC_not_full))
+                            error('%s: MM contains values outside the valid index range [1, %d] for VC_not.', obj.Name, numel(VC_not_full));
+                         end
+                         thresholds.futility(valid_MM_indices) = VC_not_full(valid_MM_values); % Index only valid M values
+                         thresholds.futility = thresholds.futility(:)'; % Ensure row vector
+                     catch ME_index
+                          error('%s: Error indexing VC_not with MM values. Ensure MM contains valid indices for VC_not. Error: %s', obj.Name, ME_index.message);
+                     end
+                 end
+             else
+                  thresholds.futility = []; % Indicate futility is not used
+             end
+        end % calculateThresholds
+
+
+        function [decisionSequence, stoppingStage] = runTest(obj, statSequence, thresholds)
+             % Runs the ETS test (NDC or Pnv) on a sequence of test statistics.
+             % Args:
+             %   statSequence: Test statistics (e.g., MSC) (bins x stages x channels). Stages correspond to MM points.
+             %   thresholds: Struct from calculateThresholds (.detection, .futility, .NDC).
+             % Returns:
+             %   decisionSequence: Decisions (1=Detect, -1=Futility, 0=Continue) (bins x stages x channels).
+             %   stoppingStage: Stage number of decision (bins x channels).
+
+             % --- Input Validation ---
+             if ~isfield(thresholds, 'detection') || ~isfield(thresholds, 'NDC')
+                 error('%s: Threshold struct missing detection or NDC fields.', obj.Name);
+             end
+             if isempty(statSequence); decisionSequence=[]; stoppingStage=[]; return; end
+
+             [nBins, K, nChannels] = size(statSequence); % K = number of test points/stages
+             VC_det = thresholds.detection(:)'; % Ensure row
+             NDC = thresholds.NDC;
+
+             if numel(VC_det) ~= K
+                 error('%s: Detection threshold length (%d) mismatch with stages (%d).', obj.Name, numel(VC_det), K);
+             end
+
+             VC_fut = []; % Initialize futility threshold
+             if obj.UseFutility % Check obj property
+                  if ~isfield(thresholds, 'futility') % Should exist if UseFutility is true
+                       error('%s: Futility enabled but futility thresholds field missing from threshold struct.', obj.Name);
+                  end
+                  VC_fut = thresholds.futility(:)'; % Ensure row
+                   % Check length only if futility threshold is actually needed and not empty
+                   if ~isempty(VC_fut) && numel(VC_fut) ~= K
+                       error('%s: Futility threshold length (%d) mismatch with stages (%d).', obj.Name, numel(VC_fut), K);
+                   end
+             end
+
+             % --- Initialize Outputs ---
+             decisionSequence = zeros(nBins, K, nChannels); % 0 = continue
+             stoppingStage = ones(nBins, nChannels) * K;    % Default stop at end
+
+             % --- Run Test Logic ---
+             for chan = 1:nChannels
+                 for freqBin = 1:nBins
+                     consecutiveDetections = 0;
+                     alreadyStopped = false;
+
+                     for k = 1:K % Loop through each test point (stage)
+                         if alreadyStopped
+                              % Carry forward decision
+                              if k > 1; decisionSequence(freqBin, k, chan) = decisionSequence(freqBin, k-1, chan); end
+                              continue;
+                         end
+
+                         currentStat = statSequence(freqBin, k, chan);
+
+                         % Handle NaN input statistic -> NaN decision
+                         if isnan(currentStat)
+                             decisionSequence(freqBin, k:K, chan) = NaN;
+                             stoppingStage(freqBin, chan) = k;
+                             alreadyStopped = true;
+                             continue;
+                         end
+
+                         % Check Detection Threshold (only if threshold is valid, i.e., not NaN)
+                         isDetect = false; % Default
+                         if ~isnan(VC_det(k)) && (currentStat > VC_det(k))
+                             isDetect = true;
+                         end
+
+                         if isDetect
+                             consecutiveDetections = consecutiveDetections + 1;
+                         else
+                             consecutiveDetections = 0; % Reset count if no detection this stage
+                         end
+
+                         % Apply NDC Decision Rule
+                         if consecutiveDetections >= NDC
+                             decisionSequence(freqBin, k:K, chan) = 1; % Detect from this stage onwards
+                             stoppingStage(freqBin, chan) = k;
+                             alreadyStopped = true;
+                             continue; % Stop testing for this freq/chan
+                         end
+
+                         % Apply Futility Decision Rule (if enabled and threshold valid)
+                         if obj.UseFutility && ~isempty(VC_fut) && ~isnan(VC_fut(k))
+                             isFutile = (currentStat < VC_fut(k));
+                             if isFutile
+                                 decisionSequence(freqBin, k:K, chan) = -1; % Futility from this stage onwards
+                                 stoppingStage(freqBin, chan) = k;
+                                 alreadyStopped = true;
+                                 continue; % Stop testing for this freq/chan
+                             end
+                         end
+
+                         % If neither condition met, continue (decision remains 0)
+                     end % stage loop (k)
+                 end % frequency loop (freqBin)
+             end % channel loop (chan)
+        end % runTest method
+
+     end % methods
+end % classdef
+
+
+============================================================
+=== FILE START: MSCAnalyzer.m
+============================================================
+
+% --- FILE START: MSCAnalyzer.m ---
+classdef MSCAnalyzer
+    % Calculates Magnitude-Squared Coherence (MSC) based on different
+    % epoching strategies using frequency-domain data.
+
+    properties
+        EpochMethod {mustBeMember(EpochMethod, {'fixedSize', 'fixedK'})} = 'fixedSize' % Method to define stages: 'fixedSize' (constant step) or 'fixedK' (fixed number of stages).
+        % --- Parameters for 'fixedSize' method ---
+        StartWindow (1,1) double {mustBeInteger, mustBePositive} = 1 % Starting window index for the first stage.
+        WindowStepSize (1,1) double {mustBeInteger, mustBePositive} = 24 % Number of windows per stage (step size).
+        % --- Parameters for 'fixedK' method ---
+        NumStages (1,1) double {mustBeInteger, mustBePositive} = 5 % Desired number of stages (K).
+
+        % --- Output Storage ---
+        mscValues % Cell array {stim/mean, subj/std, param1_idx, param2_idx} -> msc(bin, stage, channel)
+        epochDefinitions % Cell array {stim/mean, subj/std, param1_idx, param2_idx} -> [epoch_boundary_indices]
+        windowsPerStage % Cell array {stim/mean, subj/std, param1_idx, param2_idx} -> M (scalar or vector)
+
+        % --- Internal Parameter Storage ---
+        analyzedParam1Values = []
+        analyzedParam2Values = []
+        analyzedParam1Name = ''
+        analyzedParam2Name = ''
+    end
+
+    methods
+        function obj = MSCAnalyzer(epochMethod, options)
+            % Constructor: Sets epoching method and associated parameters using Name-Value pairs.
+            % Args:
+            %   epochMethod: 'fixedSize' or 'fixedK'.
+            %   options: Name-value pairs for ('StartWindow', 'WindowStepSize', 'NumStages').
+            arguments % <<< Use arguments block for validation and Name-Value pairs
+                epochMethod {mustBeMember(epochMethod, {'fixedSize', 'fixedK'})}
+                % Define Name-Value arguments within the options struct
+                options.StartWindow (1,1) double {mustBeInteger, mustBePositive} = 1 % Default value if not provided
+                options.WindowStepSize (1,1) double {mustBeInteger, mustBePositive} = 24 % Default value
+                options.NumStages (1,1) double {mustBeInteger, mustBePositive} = 5 % Default value
+            end % <<< End arguments block
+
+            obj.EpochMethod = epochMethod;
+
+            % Assign values from the 'options' struct created by the arguments block
+            obj.StartWindow = options.StartWindow;
+            obj.WindowStepSize = options.WindowStepSize;
+            obj.NumStages = options.NumStages;
+
+            fprintf('MSCAnalyzer: Initialized with EpochMethod=%s.\n', obj.EpochMethod);
+             if strcmp(obj.EpochMethod, 'fixedSize')
+                 fprintf('  Default/Specified fixedSize params: StartWindow=%d, WindowStepSize=%d\n', obj.StartWindow, obj.WindowStepSize);
+             else % fixedK
+                 fprintf('  Default/Specified fixedK params: StartWindow=%d, NumStages=%d\n', obj.StartWindow, obj.NumStages);
+             end
+        end % Constructor
+
+
+        function [mscResult, epochs, M_winsPerStage] = calculateMSC(obj, freqDomainData, currentParams)
+            % Calculates MSC for a single exam's FFT data using specified parameters.
+            % Args:
+            %   freqDomainData: FFT data (bins x windows x channels).
+            %   currentParams: Struct containing parameters for this specific calculation
+            %                  (e.g., .StartWindow, .WindowStepSize or .NumStages).
+            % Returns:
+            %   mscResult: MSC values (bins x stages x channels), NaN if error.
+            %   epochs: Vector of window indices defining stage boundaries.
+            %   M_winsPerStage: Number of windows in each calculated stage (scalar or vector).
+
+             mscResult = []; epochs = []; M_winsPerStage = []; % Initialize outputs
+
+            if isempty(freqDomainData) || all(isnan(freqDomainData(:)), 'all')
+                warning('calculateMSC: Input freqDomainData is empty or all NaN. Cannot calculate MSC.');
+                return;
+            end
+
+            [nBins, nWindowsTotal, nChannels] = size(freqDomainData);
+             if nWindowsTotal < 2
+                 warning('calculateMSC: Cannot define stages with fewer than 2 windows (found %d).', nWindowsTotal);
+                 return;
+             end
+
+            % --- Determine Epoch Boundaries ---
+            % Use parameters specifically passed for this calculation instance
+            startWin = currentParams.StartWindow;
+
+            switch obj.EpochMethod % Use obj.EpochMethod to decide logic path
+                case 'fixedSize'
+                    stepSize = currentParams.WindowStepSize;
+                    if startWin > nWindowsTotal
+                         warning('calculateMSC (fixedSize): StartWindow (%d) exceeds total windows (%d).', startWin, nWindowsTotal); return;
+                    end
+                    % Define potential epoch end points
+                    epoch_ends = startWin:stepSize:nWindowsTotal;
+                    % Epoch boundaries are start + ends, ensuring last real window is included
+                    epochs = unique([startWin, epoch_ends + 1]); % +1 because index k runs up to epochs(k+1)-1
+                    % Ensure the last boundary is truly after the last window
+                    if isempty(epochs) || epochs(end) <= nWindowsTotal % Handle edge case where only startWin exists or last epoch ends exactly at nWindowsTotal
+                         epochs = [epochs, nWindowsTotal + 1];
+                    elseif epochs(end) > nWindowsTotal + 1 % Ensure it doesn't overshoot too much if stepsize is large
+                         epochs(end) = nWindowsTotal + 1;
+                    end
+                    % Remove boundaries beyond the end + 1
+                    epochs = epochs(epochs <= nWindowsTotal + 1);
+                    epochs = unique(epochs); % Ensure uniqueness after adjustments
+
+                    if numel(epochs) < 2
+                         warning('calculateMSC (fixedSize): Epoch definition resulted in < 2 boundaries (Start=%d, Step=%d, TotalWin=%d).', startWin, stepSize, nWindowsTotal); return;
+                    end
+                     numStagesActual = numel(epochs) - 1;
+                     M_winsPerStage = repmat(stepSize, 1, numStagesActual);
+                     % Adjust M for the last stage if it's partial
+                     lastStageEnd = epochs(end)-1;
+                     lastStageStart = epochs(end-1);
+                     M_last = lastStageEnd - lastStageStart + 1;
+                      if M_last >= 0 % Check for validity
+                         M_winsPerStage(end) = M_last;
+                     else
+                         warning('calculateMSC (fixedSize): Invalid M calculated for last stage (%d). Check epoch boundaries.',M_last);
+                         epochs = epochs(1:end-1); % Remove last boundary if it caused issue
+                          if numel(epochs)<2; return; end % Stop if removing makes it invalid
+                          numStagesActual = numel(epochs) - 1;
+                          M_winsPerStage = M_winsPerStage(1:numStagesActual);
+                     end
+
+
+                case 'fixedK'
+                    K = currentParams.NumStages;
+                     if startWin > nWindowsTotal
+                         warning('calculateMSC (fixedK): StartWindow (%d) exceeds total windows (%d).', startWin, nWindowsTotal); return;
+                    end
+                    if K < 1
+                         warning('calculateMSC (fixedK): NumStages (K=%d) must be at least 1.', K); return;
+                    end
+                    % Define K+1 points from start to end+1
+                    epochs = round(linspace(startWin, nWindowsTotal + 1, K + 1));
+                    epochs = unique(epochs); % Ensure unique boundaries
+
+                     % Check if linspace collapsed points resulting in fewer than K stages
+                     numStagesActual = numel(epochs) - 1;
+                     if numStagesActual < K
+                         warning('calculateMSC (fixedK): Linspace resulted in %d stages, less than requested K=%d (Start=%d, TotalWin=%d).', numStagesActual, K, startWin, nWindowsTotal);
+                          if numStagesActual < 1; return; end % Cannot proceed if no stages
+                     end
+                     % Ensure last boundary is strictly > nWindowsTotal
+                      if epochs(end) <= nWindowsTotal
+                          epochs(end) = nWindowsTotal + 1;
+                           epochs = unique(epochs); % Recalculate stages/M if unique changed things
+                           numStagesActual = numel(epochs) - 1;
+                           if numStagesActual < 1; return; end
+                      end
+                     M_winsPerStage = diff(epochs); % Number of windows in each stage
+
+                otherwise
+                    error('Unknown EpochMethod.');
+            end % End epoch determination
+
+            % --- Validate Stage Definitions ---
+            if any(M_winsPerStage <= 0)
+                warning('calculateMSC: Epoch definition resulted in zero or negative windows per stage. M = [%s].', num2str(M_winsPerStage));
+                 mscResult = NaN(nBins, numStagesActual, nChannels); % Return NaNs
+                 return;
+             end
+
+            % --- Calculate MSC per Stage ---
+            fprintf('  Calculating MSC for %d stages...\n', numStagesActual);
+            mscResult = nan(nBins, numStagesActual, nChannels); % Use NaN for robustness
+
+            for k = 1:numStagesActual
+                idxStart = epochs(k);
+                idxEnd = epochs(k+1) - 1; % End index is inclusive
+
+                % Check calculated indices are within the actual data bounds
+                if idxStart < 1 || idxStart > nWindowsTotal || idxEnd < idxStart || idxEnd > nWindowsTotal
+                     warning('  MSC Stage %d: Invalid indices [%d, %d] for total windows %d. Skipping stage.', k, idxStart, idxEnd, nWindowsTotal);
+                     continue; % Skip this stage, result remains NaN
+                end
+
+                windowsInThisStage = idxEnd - idxStart + 1; % M for this stage
+                 if windowsInThisStage ~= M_winsPerStage(k)
+                     % This check helps catch potential off-by-one errors
+                      warning('  MSC Stage %d: M mismatch. Calculated=%d, Expected=%d. Using Calculated=%d', k, windowsInThisStage, M_winsPerStage(k), windowsInThisStage);
+                      M_winsPerStage(k) = windowsInThisStage; % Correct M based on actual indices used
+                 end
+
+                 % Skip stage if M=0 (can happen with boundary conditions)
+                  if windowsInThisStage <= 0
+                      warning('  MSC Stage %d: Calculated M=%d windows. Skipping stage.', k, windowsInThisStage);
+                      continue;
+                  end
+
+
+                % Extract FFT data for the current stage
+                currentEpochFFT = freqDomainData(:, idxStart:idxEnd, :); % bins x wins_in_stage x channels
+
+                 % Check for NaNs within this stage's data *before* calculation
+                 if any(isnan(currentEpochFFT), 'all')
+                     warning('  MSC Stage %d: NaNs detected in input FFT data. Result for this stage will be NaN.', k);
+                     continue; % Skip calculation for this stage, result remains NaN
+                 end
+
+                % --- Calculate MSC using formula: |sum(Y_k)|^2 / (M * sum(|Y_k|^2)) ---
+                try
+                    sum_Y = sum(currentEpochFFT, 2);
+                    sum_absY_sq = sum(abs(currentEpochFFT).^2, 2);
+
+                    denominator = windowsInThisStage * sum_absY_sq;
+                    zeroThreshold = eps(class(denominator));
+                    valid_den_mask = denominator > zeroThreshold;
+
+                    msc_stage = zeros(nBins, 1, nChannels) * NaN; % Initialize with NaNs
+                    msc_stage(valid_den_mask) = abs(sum_Y(valid_den_mask)).^2 ./ denominator(valid_den_mask);
+
+                    msc_stage = real(msc_stage);
+                    msc_stage = max(0, min(1, msc_stage));
+
+                    mscResult(:, k, :) = msc_stage;
+
+                catch ME_msc
+                     warning('  MSC Stage %d: Error during MSC calculation: %s. Result for this stage set to NaN.', k, ME_msc.message);
+                     mscResult(:, k, :) = NaN; % Ensure result is NaN if calculation fails
+                 end
+            end % End stage loop (k)
+            fprintf('  MSC calculation finished.\n');
+        end % calculateMSC
+
+
+        function obj = analyzeBulkMSC(obj, signalProcessor, p)
+            % Calculates MSC for bulk data using ranges of parameters.
+            arguments
+                obj MSCAnalyzer
+                signalProcessor SignalProcessor
+                p.StartWindows double = obj.StartWindow
+                p.WindowStepSizes double = obj.WindowStepSize
+                p.NumStages double = obj.NumStages
+            end
+
+            bulkFFTData = signalProcessor.getBulkFrequencyDomainData();
+            if isempty(bulkFFTData)
+                error('MSCAnalyzer: Bulk FFT data is empty in SignalProcessor.');
+            end
+            [nDim1, nDim2] = size(bulkFFTData);
+
+            % --- Determine Parameter Combinations ---
+            if strcmp(obj.EpochMethod, 'fixedSize')
+                params1_vals = p.StartWindows(:)';
+                params2_vals = p.WindowStepSizes(:)';
+                obj.analyzedParam1Name = 'StartWindow';
+                obj.analyzedParam2Name = 'WindowStepSize';
+            elseif strcmp(obj.EpochMethod, 'fixedK')
+                params1_vals = p.StartWindows(:)';
+                params2_vals = p.NumStages(:)';
+                 obj.analyzedParam1Name = 'StartWindow';
+                 obj.analyzedParam2Name = 'NumStages';
+            else
+                error('Unhandled EpochMethod in bulk analysis.');
+            end
+            nParam1 = numel(params1_vals);
+            nParam2 = numel(params2_vals);
+            obj.analyzedParam1Values = params1_vals;
+            obj.analyzedParam2Values = params2_vals;
+
+            % --- Preallocate Result Cell Arrays ---
+            obj.mscValues = cell(nDim1, nDim2, nParam1, nParam2);
+            obj.epochDefinitions = cell(nDim1, nDim2, nParam1, nParam2);
+            obj.windowsPerStage = cell(nDim1, nDim2, nParam1, nParam2);
+
+            fprintf('MSCAnalyzer: Starting bulk MSC calculation across parameters...\n');
+            fprintf('  Epoch Method: %s\n', obj.EpochMethod);
+            fprintf('  Parameter 1 (%s): %s\n', obj.analyzedParam1Name, mat2str(params1_vals));
+            fprintf('  Parameter 2 (%s): %s\n', obj.analyzedParam2Name, mat2str(params2_vals));
+            totalCalculations = nDim1 * nDim2 * nParam1 * nParam2;
+            calcCount = 0;
+
+            % --- Loop through Data and Parameters ---
+            for idx1 = 1:nDim1 % Stim/Mean
+                for idx2 = 1:nDim2 % Subj/Std
+                    fftData = []; % Ensure defined
+                    if idx1 <= size(bulkFFTData,1) && idx2 <= size(bulkFFTData,2)
+                        fftData = bulkFFTData{idx1, idx2};
+                    end
+
+                    if isempty(fftData)
+                         calcCount = calcCount + (nParam1 * nParam2); % Increment count even for skipped data
+                         fprintf('  Skipping Index1=%d, Index2=%d (empty FFT data). Progress: %d/%d\n', idx1, idx2, calcCount, totalCalculations);
+                         continue;
+                     end
+
+                    for p1Idx = 1:nParam1
+                        for p2Idx = 1:nParam2
+                            calcCount = calcCount + 1;
+                            fprintf('  Calculating MSC %d/%d (Idx1:%d, Idx2:%d, P1:%d, P2:%d)...\n', ...
+                                    calcCount, totalCalculations, idx1, idx2, p1Idx, p2Idx);
+
+                            % --- Set Parameters for this specific calculation ---
+                            currentParams = struct();
+                            currentParams.StartWindow = params1_vals(p1Idx);
+                            if strcmp(obj.EpochMethod, 'fixedSize')
+                                currentParams.WindowStepSize = params2_vals(p2Idx);
+                            else % fixedK
+                                currentParams.NumStages = params2_vals(p2Idx);
+                            end
+
+                            % --- Calculate MSC ---
+                            [msc, epochs, M_wins] = obj.calculateMSC(fftData, currentParams);
+
+                            % --- Store results ---
+                             obj.mscValues{idx1, idx2, p1Idx, p2Idx} = msc;
+                             obj.epochDefinitions{idx1, idx2, p1Idx, p2Idx} = epochs;
+                             obj.windowsPerStage{idx1, idx2, p1Idx, p2Idx} = M_wins;
+
+                        end % p2Idx
+                    end % p1Idx
+                end % idx2
+            end % idx1
+             fprintf('MSCAnalyzer: Bulk MSC calculation complete.\n');
+        end % analyzeBulkMSC
+
+
+        % --- Access MSC Data ---
+         function data = getMSCData(obj, idx1, idx2, p1Idx, p2Idx)
+             % Access MSC for a specific exam and parameter set index.
+             s = size(obj.mscValues);
+             if isempty(s) || numel(s) ~= 4
+                 warning('MSCAnalyzer: Bulk MSC values not calculated yet or have unexpected dimensions.'); data = []; return;
+             end
+             if idx1 >= 1 && idx1 <= s(1) && idx2 >= 1 && idx2 <= s(2) && p1Idx >= 1 && p1Idx <= s(3) && p2Idx >= 1 && p2Idx <= s(4)
+                 data = obj.mscValues{idx1, idx2, p1Idx, p2Idx};
+             else
+                 warning('MSCAnalyzer: Indices (%d, %d, %d, %d) out of bounds for MSC data [%d x %d x %d x %d].', ...
+                         idx1, idx2, p1Idx, p2Idx, s(1), s(2), s(3), s(4));
+                 data = [];
+             end
+         end
+          function bulkData = getBulkMSCData(obj)
+             % Returns the entire cell array of MSC values.
+             bulkData = obj.mscValues;
+         end
+         function epochs = getEpochs(obj, idx1, idx2, p1Idx, p2Idx)
+            % Access epoch definitions for a specific exam and parameter set index.
+              s = size(obj.epochDefinitions);
+              if isempty(s) || numel(s) ~= 4
+                 warning('MSCAnalyzer: Epoch definitions not calculated yet or have unexpected dimensions.'); epochs = []; return;
+              end
+             if idx1 >= 1 && idx1 <= s(1) && idx2 >= 1 && idx2 <= s(2) && p1Idx >= 1 && p1Idx <= s(3) && p2Idx >= 1 && p2Idx <= s(4)
+                 epochs = obj.epochDefinitions{idx1, idx2, p1Idx, p2Idx};
+             else
+                 warning('MSCAnalyzer: Indices (%d, %d, %d, %d) out of bounds for epoch definitions [%d x %d x %d x %d].', ...
+                          idx1, idx2, p1Idx, p2Idx, s(1), s(2), s(3), s(4));
+                 epochs = [];
+             end
+         end
+         function M = getWindowsPerStage(obj, idx1, idx2, p1Idx, p2Idx)
+            % Access M (windows per stage) for a specific exam and parameter set index.
+              s = size(obj.windowsPerStage);
+              if isempty(s) || numel(s) ~= 4
+                 warning('MSCAnalyzer: Windows per stage not calculated yet or have unexpected dimensions.'); M = []; return;
+              end
+             if idx1 >= 1 && idx1 <= s(1) && idx2 >= 1 && idx2 <= s(2) && p1Idx >= 1 && p1Idx <= s(3) && p2Idx >= 1 && p2Idx <= s(4)
+                 M = obj.windowsPerStage{idx1, idx2, p1Idx, p2Idx};
+             else
+                  warning('MSCAnalyzer: Indices (%d, %d, %d, %d) out of bounds for windows per stage [%d x %d x %d x %d].', ...
+                           idx1, idx2, p1Idx, p2Idx, s(1), s(2), s(3), s(4));
+                 M = [];
+             end
+         end
+
+    end % methods
+end % classdef
+
+
+============================================================
+=== FILE START: SequentialTester.m
+============================================================
+
+% --- FILE START: SequentialTester.m ---
+classdef SequentialTester < handle
+    % Orchestrates the execution of sequential tests using a specified strategy.
+    % Manages test parameters, runs tests on bulk data, and calculates performance metrics.
+
+    properties
+        Strategy % Handle to the TestStrategy object to be used. <<< TYPE HINT REMOVED
+        DataManager DataManager % Handle to DataManager for metadata (Fs, frequencies, mode).
+        MSCAnalyzer MSCAnalyzer % Handle to MSCAnalyzer for accessing MSC data and epoch info.
+
+        % Results Storage
+        TestDecisions % Cell array {stim/mean, subj/std, param1, param2} -> decisions(bin, stage, channel)
+        StoppingStages % Cell array {stim/mean, subj/std, param1, param2} -> stoppingStage(bin, channel)
+        StrategyParamsArray % Cell array storing the parameters used for each test run.
+        PerformanceMetrics % Struct storing performance metrics (e.g., TPR, FPR). Calculated by calculatePerformance.
+    end
+
+    methods
+        function obj = SequentialTester(strategy, dataManager, mscAnalyzer)
+            % Constructor: Initializes the tester with necessary components.
+            arguments
+                strategy TestStrategy % <<< Keep type hint for constructor input validation
+                dataManager DataManager
+                mscAnalyzer MSCAnalyzer
+            end
+            % Assign the concrete strategy object passed in
+            obj.Strategy = strategy;
+            obj.DataManager = dataManager;
+            obj.MSCAnalyzer = mscAnalyzer;
+            fprintf('SequentialTester: Initialized with Strategy: %s.\n', obj.Strategy.Name); % Can now safely access strategy name
+        end
+
+        function obj = runBulkTest(obj, strategyParamsInput)
+            % Runs the configured test strategy on all exams and parameter sets
+            % defined in the MSCAnalyzer.
+            % Args:
+            %   strategyParamsInput: Either a scalar struct (if params are the same for all tests)
+            %                        or a cell array matching the dimensions of MSCAnalyzer.mscValues
+            %                        ({stim/mean, subj/std, p1, p2}), where each cell contains the
+            %                        struct needed by the Strategy's calculateThresholds method
+            %                        (e.g., struct('alpha', 0.05, 'NDC', 3)).
+
+            bulkMSCData = obj.MSCAnalyzer.getBulkMSCData();
+            epochDefs = obj.MSCAnalyzer.epochDefinitions; % Get corresponding epoch info
+            winPerStage = obj.MSCAnalyzer.windowsPerStage; % Get M info
+
+            if isempty(bulkMSCData)
+                error('SequentialTester: MSC data is empty in MSCAnalyzer. Run MSC analysis first.');
+            end
+
+            [nDim1, nDim2, nParam1, nParam2] = size(bulkMSCData);
+            dataSize = [nDim1, nDim2, nParam1, nParam2];
+
+            % --- Validate and Store Strategy Parameters ---
+            useScalarParams = false;
+            if isstruct(strategyParamsInput) && isscalar(strategyParamsInput)
+                obj.StrategyParamsArray = repmat({strategyParamsInput}, dataSize); % Expand scalar to cell array
+                useScalarParams = true;
+                fprintf('SequentialTester: Using scalar strategy parameters for all tests.\n');
+            elseif iscell(strategyParamsInput) && isequal(size(strategyParamsInput), dataSize)
+                obj.StrategyParamsArray = strategyParamsInput;
+                fprintf('SequentialTester: Using provided cell array of strategy parameters.\n');
+            else
+                error('SequentialTester: strategyParamsInput must be a scalar struct or a cell array matching MSC data dimensions [%d x %d x %d x %d].', dataSize);
+            end
+
+            % --- Preallocate Results ---
+            obj.TestDecisions = cell(dataSize);
+            obj.StoppingStages = cell(dataSize);
+
+            fprintf('SequentialTester: Starting bulk test execution (%s Strategy)...\n', obj.Strategy.Name);
+            totalTests = numel(bulkMSCData);
+            testCount = 0;
+
+            % --- Loop Through Data and Parameter Sets ---
+            for idx1 = 1:nDim1 % Stim/Mean
+                for idx2 = 1:nDim2 % Subj/Std
+                    for p1Idx = 1:nParam1
+                        for p2Idx = 1:nParam2
+                            testCount = testCount + 1;
+                            fprintf('  Running Test %d/%d (Idx1:%d, Idx2:%d, P1:%d, P2:%d)...', ...
+                                    testCount, totalTests, idx1, idx2, p1Idx, p2Idx);
+
+                            mscData = bulkMSCData{idx1, idx2, p1Idx, p2Idx};
+                            epochs = epochDefs{idx1, idx2, p1Idx, p2Idx};
+                            M_vals = winPerStage{idx1, idx2, p1Idx, p2Idx};
+                            currentStrategyParams = obj.StrategyParamsArray{idx1, idx2, p1Idx, p2Idx};
+
+                            % --- Validate Inputs for this Test ---
+                            if isempty(mscData) || isempty(epochs) || isempty(M_vals) || isempty(currentStrategyParams)
+                                fprintf(' Skipping (missing data/params).\n');
+                                obj.TestDecisions{idx1, idx2, p1Idx, p2Idx} = []; % Mark as skipped
+                                obj.StoppingStages{idx1, idx2, p1Idx, p2Idx} = [];
+                                continue;
+                            end
+                            if numel(epochs) < 2
+                                 fprintf(' Skipping (invalid epoch definition).\n');
+                                 continue;
+                            end
+
+                            % --- Prepare Analysis Info for Strategy ---
+                            analysisInfo.K = size(mscData, 2); % Number of stages from MSC data
+                            if analysisInfo.K == 0
+                                 fprintf(' Skipping (MSC data has 0 stages).\n');
+                                 continue;
+                            end
+                            analysisInfo.M = M_vals; % Windows per stage (scalar or vector)
+                            % Add MM for ETS strategies (window count at each test point)
+                             if numel(epochs) > 1
+                                analysisInfo.MM = epochs(2:end) - 1; % M value at the end of stage k
+                             else
+                                 analysisInfo.MM = []; % Or handle error appropriately
+                                  fprintf(' Skipping (cannot determine MM from epochs).\n');
+                                  continue;
+                             end
+
+
+                             % --- Calculate Thresholds ---
+                            try
+                                thresholds = obj.Strategy.calculateThresholds(currentStrategyParams, analysisInfo);
+                                fprintf(' Thresh OK...');
+                            catch ME
+                                warning('SequentialTester:runBulkTest', '\n    Error calculating thresholds for Idx1:%d, Idx2:%d, P1:%d, P2:%d: %s. Skipping test.', idx1, idx2, p1Idx, p2Idx, ME.message);
+                                 obj.TestDecisions{idx1, idx2, p1Idx, p2Idx} = [];
+                                 obj.StoppingStages{idx1, idx2, p1Idx, p2Idx} = [];
+                                continue; % Skip to next test
+                            end
+
+                             % --- Run the Test ---
+                             try
+                                [decisions, stopping] = obj.Strategy.runTest(mscData, thresholds);
+                                obj.TestDecisions{idx1, idx2, p1Idx, p2Idx} = decisions;
+                                obj.StoppingStages{idx1, idx2, p1Idx, p2Idx} = stopping;
+                                fprintf(' Test OK.\n');
+                             catch ME_run
+                                  warning('SequentialTester:runBulkTest','\n    Error running test for Idx1:%d, Idx2:%d, P1:%d, P2:%d: %s. Skipping test.', idx1, idx2, p1Idx, p2Idx, ME_run.message);
+                                   obj.TestDecisions{idx1, idx2, p1Idx, p2Idx} = [];
+                                   obj.StoppingStages{idx1, idx2, p1Idx, p2Idx} = [];
+                                   continue; % Skip to next test
+                             end
+
+                        end % p2Idx
+                    end % p1Idx
+                end % idx2
+            end % idx1
+            fprintf('SequentialTester: Bulk testing complete.\n');
+        end % runBulkTest
+
+        function obj = calculatePerformance(obj)
+            % Calculates performance metrics (TPR, FPR, TNR, FNR) based on stored test decisions.
+            % Assumes Simulation mode where ground truth (signal/noise frequencies) is known.
+
+            if isempty(obj.TestDecisions)
+                 warning('SequentialTester: Cannot calculate performance. Run runBulkTest first.');
+                 obj.PerformanceMetrics = [];
+                 return;
+            end
+            if ~strcmp(obj.DataManager.Mode, 'sim')
+                 warning('SequentialTester: Performance calculation requires simulation mode for ground truth. Results might be inaccurate.');
+                 % Proceed but metrics might be meaningless without known ground truth
+            end
+
+            fprintf('SequentialTester: Calculating performance metrics...\n');
+            decisionsCell = obj.TestDecisions;
+            stoppingCell = obj.StoppingStages;
+            if isempty(decisionsCell) % Check if TestDecisions is populated
+                warning('SequentialTester: TestDecisions cell array is empty. No performance calculated.');
+                obj.PerformanceMetrics = [];
+                return;
+            end
+            [nDim1, nDim2, nParam1, nParam2] = size(decisionsCell); % Dims match noise means/stds/param combos
+
+            % --- Get Ground Truth Frequencies ---
+            fs = obj.DataManager.Fs;
+            nfft = obj.DataManager.getNFFT();
+            if nfft == 0; error('SequentialTester: NFFT is zero, cannot map frequencies to bins.'); end
+            freqResolution = fs / nfft;
+
+            sigFreqs_Hz = obj.DataManager.SimSignalFrequencies;
+            noiseFreqs_Hz = obj.DataManager.SimNoiseFrequencies;
+
+            % Convert Hz to approximate bin indices (1-based)
+            sigFreqBins = round(sigFreqs_Hz / freqResolution) + 1;
+            noiseFreqBins = round(noiseFreqs_Hz / freqResolution) + 1;
+
+            % Ensure bins are within valid range
+            maxBin = obj.DataManager.getNumBins();
+            sigFreqBins = sigFreqBins(sigFreqBins >= 1 & sigFreqBins <= maxBin);
+            noiseFreqBins = noiseFreqBins(noiseFreqBins >= 1 & noiseFreqBins <= maxBin);
+            sigFreqBins = unique(sigFreqBins);
+            noiseFreqBins = unique(noiseFreqBins);
+            noiseFreqBins = setdiff(noiseFreqBins, sigFreqBins); % Remove overlap
+
+            nSignalFreqs = numel(sigFreqBins);
+            nNoiseFreqs = numel(noiseFreqBins);
+
+            if nSignalFreqs == 0; warning('SequentialTester: No valid signal frequency bins found after mapping/validation.'); end
+            if nNoiseFreqs == 0; warning('SequentialTester: No valid noise frequency bins found after mapping/validation.'); end
+            fprintf('  Using %d signal bins, %d noise bins.\n', nSignalFreqs, nNoiseFreqs);
+
+            % --- Store results per parameter set ---
+            paramResults = repmat(struct('TP', 0, 'FP', 0, 'TN', 0, 'FN', 0, ...
+                                         'TotalSignalOpportunities', 0, 'TotalNoiseOpportunities', 0), ...
+                                  [nParam1, nParam2]);
+
+            % --- Aggregate results ---
+            for p1Idx = 1:nParam1
+                for p2Idx = 1:nParam2
+                    fprintf('  Aggregating performance for ParamSet (P1:%d, P2:%d)...\n', p1Idx, p2Idx);
+                    tp_count = 0; fp_count = 0; tn_count = 0; fn_count = 0;
+                    total_sig_opp = 0; total_noise_opp = 0;
+
+                    for idx1 = 1:nDim1 % Noise Mean index
+                        for idx2 = 1:nDim2 % Noise Std index
+                            decisions = decisionsCell{idx1, idx2, p1Idx, p2Idx};
+                            stopping = stoppingCell{idx1, idx2, p1Idx, p2Idx};
+
+                            if isempty(decisions) || isempty(stopping); continue; end
+
+                            [nBins, K, nChannels] = size(decisions);
+                            if isempty(nChannels) || nChannels == 0 || K == 0; continue; end
+
+                            % Get final decision state
+                            final_decision = zeros(nBins, nChannels);
+                            for chan = 1:nChannels
+                                for bin = 1:nBins
+                                     % Check if stopping indices are valid for this bin/chan
+                                     if bin > size(stopping, 1) || chan > size(stopping, 2)
+                                         % warning('SequentialTester: Stopping stage index (%d, %d) out of bounds for size [%d x %d]. Using K as stop stage.', bin, chan, size(stopping, 1), size(stopping, 2));
+                                         stop_k = K; % Default to last stage if index invalid
+                                     else
+                                         stop_k = stopping(bin, chan);
+                                     end
+
+                                    % Handle cases where stopping might be NaN or invalid
+                                    if isnan(stop_k) || stop_k < 1 || stop_k > K
+                                        stop_k = K; % Default to checking last stage if stop info invalid
+                                    else
+                                        stop_k = round(min(stop_k, K)); % Ensure integer within bounds [1, K]
+                                    end
+
+                                    % Check if decision indices are valid
+                                     if bin > size(decisions, 1) || stop_k > size(decisions, 2) || chan > size(decisions, 3)
+                                          warning('SequentialTester: Decision index (%d, %d, %d) out of bounds for size [%d x %d x %d]. Skipping bin/channel.', bin, stop_k, chan, size(decisions, 1), size(decisions, 2), size(decisions, 3));
+                                         final_decision(bin, chan) = NaN; % Mark as invalid
+                                         continue;
+                                     end
+
+                                    final_decision_val = decisions(bin, stop_k, chan);
+                                    % Treat NaN decision as "no detection" (FN for signal, TN for noise)
+                                    if isnan(final_decision_val)
+                                        final_decision(bin, chan) = 0; % Or -1 if preferred interpretation
+                                    else
+                                        final_decision(bin, chan) = final_decision_val;
+                                    end
+                                end % bin loop
+                            end % chan loop (for final decision)
+
+
+                            % Count outcomes vs ground truth
+                            for chan = 1:nChannels
+                                % Signal Frequencies
+                                if nSignalFreqs > 0 && ~isempty(sigFreqBins)
+                                    valid_sig_bins = sigFreqBins(sigFreqBins <= nBins); % Ensure bins exist in decisions
+                                    if ~isempty(valid_sig_bins)
+                                         chan_decisions_sig = final_decision(valid_sig_bins, chan);
+                                         tp_count = tp_count + sum(chan_decisions_sig == 1);
+                                         fn_count = fn_count + sum(chan_decisions_sig ~= 1); % Includes 0, -1, NaN
+                                         total_sig_opp = total_sig_opp + numel(valid_sig_bins);
+                                    end
+                                end
+                                % Noise Frequencies
+                                  if nNoiseFreqs > 0 && ~isempty(noiseFreqBins)
+                                     valid_noise_bins = noiseFreqBins(noiseFreqBins <= nBins); % Ensure bins exist
+                                     if ~isempty(valid_noise_bins)
+                                         chan_decisions_noise = final_decision(valid_noise_bins, chan);
+                                         fp_count = fp_count + sum(chan_decisions_noise == 1);
+                                         tn_count = tn_count + sum(chan_decisions_noise ~= 1); % Includes 0, -1, NaN
+                                         total_noise_opp = total_noise_opp + numel(valid_noise_bins);
+                                     end
+                                end
+                            end % channel loop (for counting)
+                        end % idx2 loop (Std)
+                    end % idx1 loop (Mean)
+
+                    % Store aggregated counts
+                    paramResults(p1Idx, p2Idx).TP = tp_count;
+                    paramResults(p1Idx, p2Idx).FP = fp_count;
+                    paramResults(p1Idx, p2Idx).TN = tn_count;
+                    paramResults(p1Idx, p2Idx).FN = fn_count;
+                    paramResults(p1Idx, p2Idx).TotalSignalOpportunities = total_sig_opp;
+                    paramResults(p1Idx, p2Idx).TotalNoiseOpportunities = total_noise_opp;
+                end % p2Idx loop
+            end % p1Idx loop
+
+            obj.PerformanceMetrics.PerParameter = paramResults;
+
+            % --- Calculate Overall Rates ---
+             try % Wrap in try-catch for safety
+                 all_TP = sum([paramResults.TP]); all_FP = sum([paramResults.FP]);
+                 all_TN = sum([paramResults.TN]); all_FN = sum([paramResults.FN]);
+                 all_TotalSig = sum([paramResults.TotalSignalOpportunities]);
+                 all_TotalNoise = sum([paramResults.TotalNoiseOpportunities]);
+
+                 obj.PerformanceMetrics.Overall = struct(); % Initialize struct
+
+                 if all_TotalSig > 0
+                     obj.PerformanceMetrics.Overall.TPR = 100 * all_TP / all_TotalSig;
+                     obj.PerformanceMetrics.Overall.FNR = 100 * all_FN / all_TotalSig;
+                 else
+                     obj.PerformanceMetrics.Overall.TPR = NaN; obj.PerformanceMetrics.Overall.FNR = NaN;
+                 end
+                 if all_TotalNoise > 0
+                     obj.PerformanceMetrics.Overall.FPR = 100 * all_FP / all_TotalNoise;
+                     obj.PerformanceMetrics.Overall.TNR = 100 * all_TN / all_TotalNoise;
+                 else
+                      obj.PerformanceMetrics.Overall.FPR = NaN; obj.PerformanceMetrics.Overall.TNR = NaN;
+                 end
+                 if (all_TotalSig + all_TotalNoise) > 0
+                    obj.PerformanceMetrics.Overall.Accuracy = 100 * (all_TP + all_TN) / (all_TotalSig + all_TotalNoise);
+                 else
+                     obj.PerformanceMetrics.Overall.Accuracy = NaN;
+                 end
+
+                 fprintf('SequentialTester: Performance calculation complete.\n');
+                 disp('Overall Performance Metrics:');
+                 disp(obj.PerformanceMetrics.Overall);
+
+            catch ME_perf
+                warning('SequentialTester:calculatePerformance', 'Error calculating overall performance metrics: %s', ME_perf.message);
+                obj.PerformanceMetrics.Overall = struct('Error', ME_perf.message);
+            end
+
+         end % calculatePerformance method
+
+         function obj = calculateAverageStoppingTime(obj, p)
+             % Calculates average stopping time (in stages or seconds) per parameter set.
+             arguments
+                 obj
+                 p.Units {mustBeMember(p.Units, {'stages', 'seconds'})} = 'stages'
+             end
+
+             avgStopTime = []; % Initialize output
+             if isempty(obj.StoppingStages)
+                 warning('SequentialTester: Cannot calculate stopping time. Run runBulkTest first.');
+                 return;
+             end
+
+             stoppingCell = obj.StoppingStages;
+             [nDim1, nDim2, nParam1, nParam2] = size(stoppingCell);
+             avgStopTime = nan(nParam1, nParam2); % Store avg stop time per param set
+
+             fprintf('SequentialTester: Calculating average stopping time (Units: %s)...\n', p.Units);
+
+             for p1Idx = 1:nParam1
+                 for p2Idx = 1:nParam2
+                     allStopsForParamSet = []; % Collect stopping stages for this param set
+
+                     for idx1 = 1:nDim1
+                         for idx2 = 1:nDim2
+                             stopping = stoppingCell{idx1, idx2, p1Idx, p2Idx};
+                             if ~isempty(stopping)
+                                 allStopsForParamSet = [allStopsForParamSet; stopping(:)]; % Flatten and append
+                             end
+                         end
+                     end
+
+                     if ~isempty(allStopsForParamSet)
+                         validStops = allStopsForParamSet(~isnan(allStopsForParamSet)); % Exclude NaNs
+                         if ~isempty(validStops)
+                             if strcmp(p.Units, 'stages')
+                                 avgStopTime(p1Idx, p2Idx) = mean(validStops);
+                             else % seconds
+                                 warning('SequentialTester:calculateAverageStoppingTime', 'Calculating stopping time in seconds requires robust mapping of stages to time, which is complex in bulk mode. Returning average stage number instead.');
+                                 avgStopTime(p1Idx, p2Idx) = mean(validStops);
+                                 % TODO: Implement seconds calculation if epoch durations can be reliably retrieved for *each* test instance.
+                             end
+                         end % ~isempty(validStops)
+                     end % ~isempty(allStopsForParamSet)
+                 end % p2Idx
+             end % p1Idx
+              fprintf('SequentialTester: Average stopping time calculation finished.\n');
+              % Store result within PerformanceMetrics if it exists
+              if isfield(obj.PerformanceMetrics,'PerParameter') || isfield(obj.PerformanceMetrics,'Overall')
+                    obj.PerformanceMetrics.AverageStoppingTime = avgStopTime;
+              else
+                   obj.PerformanceMetrics = struct('AverageStoppingTime',avgStopTime);
+              end
+         end % calculateAverageStoppingTime method
+
+    end % methods
+end % classdef
+
+
+============================================================
+=== FILE START: SignalProcessor.m
+============================================================
+
+% --- FILE START: SignalProcessor.m ---
+classdef SignalProcessor
+    % Handles time-domain preprocessing (artifact rejection, filtering)
+    % and FFT calculation for EEG data.
+
+    properties
+        % --- Zanoteli Preprocessing Parameters ---
+        ZanoteliEnable (1,1) logical = true
+        ZanoteliGain (1,1) double {mustBePositive} = 200 % Keep validation for independent params
+        ZanoteliThreshold (1,1) double % Calculated
+
+        % --- Filtering Parameters ---
+        FilterEnable (1,1) logical = true
+        FilterFcLower (1,1) double {mustBePositive} = 70 % Keep validation
+        FilterFcUpper (1,1) double       % Calculated
+        FilterOrder (1,1) double {mustBeInteger, mustBePositive} = 8 % Keep validation
+
+        % --- Output Storage ---
+        processedTimeSeries % Cell array {stim/mean_idx, subj/std_idx} -> data(sample, window, channel)
+        frequencyDomainData % Cell array {stim/mean_idx, subj/std_idx} -> FFT data(bin, window, channel)
+
+        % --- Internal State ---
+        % Remove validation from properties derived from DataManager
+        Fs (1,1) double
+        NFFT (1,1) double
+        NumBins (1,1) double
+        NumChannels (1,1) double
+    end
+
+    methods
+        function obj = SignalProcessor(dataManager)
+            % Constructor: Initializes processor with info from DataManager.
+            % All properties derived from dataManager are calculated AND validated here.
+            arguments
+                dataManager DataManager
+            end
+
+            % --- 1. Get DataManager Properties ---
+            tempFs = dataManager.Fs;
+            tempNFFT = dataManager.getNFFT(); % Should be equal to Fs usually
+            tempNumBins = dataManager.getNumBins();
+            tempNumChannels = numel(dataManager.SelectedChannels);
+
+            % --- 2. Validate Retrieved Properties ---
+            if ~isscalar(tempFs) || tempFs <= 0
+                error('SignalProcessor: Fs value (%g) received from DataManager must be a positive scalar.', tempFs);
+            end
+             if ~isscalar(tempNFFT) || tempNFFT <= 0 || floor(tempNFFT) ~= tempNFFT
+                error('SignalProcessor: NFFT value (%g) derived from DataManager must be a positive integer scalar.', tempNFFT);
+            end
+             if ~isscalar(tempNumBins) || tempNumBins <= 0 || floor(tempNumBins) ~= tempNumBins
+                error('SignalProcessor: NumBins value (%g) derived from DataManager must be a positive integer scalar.', tempNumBins);
+            end
+             if ~isscalar(tempNumChannels) || tempNumChannels <= 0 || floor(tempNumChannels) ~= tempNumChannels
+                 error('SignalProcessor: NumChannels value (%g) derived from DataManager must be a positive integer scalar.', tempNumChannels);
+            end
+
+            % --- 3. Assign Validated Properties to Object ---
+            obj.Fs = tempFs;
+            obj.NFFT = tempNFFT;
+            obj.NumBins = tempNumBins;
+            obj.NumChannels = tempNumChannels;
+
+            % --- 4. Calculate and Validate Dependent Properties ---
+            obj.ZanoteliThreshold = 0.1 / obj.ZanoteliGain; % Threshold in Volts
+            obj.FilterFcUpper = obj.Fs / 2 - 1; % Nyquist minus a bit
+
+            if obj.FilterFcUpper <= 0
+                error('SignalProcessor: Calculated FilterFcUpper (%g) must be positive. Check Fs value (%g).', obj.FilterFcUpper, obj.Fs);
+            end
+             if obj.FilterEnable && obj.FilterFcLower >= obj.FilterFcUpper
+                warning('SignalProcessor: Lower filter cutoff (%g Hz) is not less than upper cutoff (%g Hz). Adjust parameters or disable filter.', obj.FilterFcLower, obj.FilterFcUpper);
+             end
+
+            fprintf('SignalProcessor: Initialized. Fs=%d, NFFT=%d, NumBins=%d, NumChannels=%d.\n', obj.Fs, obj.NFFT, obj.NumBins, obj.NumChannels);
+        end % Constructor
+
+        % --- applyPreprocessing Method ---
+        function processedSignal = applyPreprocessing(obj, rawSignal, Mmax_limit)
+             % Applies configured preprocessing steps (Zanoteli, Filtering) to a single exam's data.
+             % Args:
+             %   rawSignal: Raw time series data (samples x windows x channels).
+             %   Mmax_limit: Maximum number of windows to retain after artifact rejection.
+             % Returns:
+             %   processedSignal: Preprocessed time series data, potentially shorter than Mmax_limit. Returns empty if processing fails.
+
+             processedSignal = []; % Initialize output
+             if isempty(rawSignal)
+                 fprintf('applyPreprocessing: Input rawSignal is empty.\n');
+                 return;
+             end
+
+             currentSignal = rawSignal;
+             [nSamples, nWindowsRaw, nChanRaw] = size(currentSignal);
+             if nChanRaw == 0; fprintf('applyPreprocessing: Input rawSignal has 0 channels.\n'); return; end
+             if nSamples == 0; fprintf('applyPreprocessing: Input rawSignal has 0 samples.\n'); return; end
+             if nWindowsRaw == 0; fprintf('applyPreprocessing: Input rawSignal has 0 windows.\n'); return; end
+
+
+             % Use the actual number of channels from the input data for processing this specific signal
+             numChanToProcess = nChanRaw;
+             if nChanRaw ~= obj.NumChannels
+                warning('applyPreprocessing: Channel count in data (%d) differs from processor config (%d). Processing %d channels.', nChanRaw, obj.NumChannels, nChanRaw);
+             end
+
+             % --- 1. Zanoteli Artifact Removal (if enabled) ---
+             if obj.ZanoteliEnable
+                 % Use Mmax_limit which should be Inf if not specified or calculable
+                 effectiveMmax = min(Mmax_limit, nWindowsRaw); % Don't preallocate beyond original windows unless necessary
+                 if isinf(effectiveMmax); effectiveMmax = nWindowsRaw; end % Handle Inf case
+
+                 fprintf('  Applying Zanoteli preprocessing (Threshold=%.2e V, Mmax Limit=%d)...\n', obj.ZanoteliThreshold, effectiveMmax);
+                 processedZanoteli = nan(nSamples, effectiveMmax, numChanToProcess); % Preallocate size based on Mmax limit or original size
+                 minWindowsAcrossChannels = effectiveMmax;
+
+                 for chan = 1:numChanToProcess
+                     x_chan = squeeze(currentSignal(:, :, chan));
+
+                     % Remove DC per window (epoch)
+                     try % Add try-catch for robustness
+                        x_chan_mean = mean(x_chan, 1);
+                        x_chan = x_chan - x_chan_mean;
+                     catch ME_dc
+                         warning('Zanoteli: Error removing DC for channel %d: %s. Skipping channel.', chan, ME_dc.message);
+                         minWindowsAcrossChannels = 0; continue;
+                     end
+
+                     % Skip first 2 seconds (windows)
+                     if size(x_chan, 2) > 2
+                         x_chan(:, 1:2) = [];
+                     else
+                         warning('Zanoteli: Signal too short (<3 windows) to remove first 2s for channel %d. Skipping channel.', chan);
+                         minWindowsAcrossChannels = 0; continue;
+                     end
+
+                     % Amplitude thresholding
+                     try
+                        Vmax = max(abs(x_chan), [], 1);
+                        valid_windows_mask = Vmax <= obj.ZanoteliThreshold;
+                        x_clean = x_chan(:, valid_windows_mask);
+                     catch ME_thresh
+                          warning('Zanoteli: Error during thresholding for channel %d: %s. Skipping channel.', chan, ME_thresh.message);
+                          minWindowsAcrossChannels = 0; continue;
+                     end
+
+                     % Limit to Mmax_limit and store valid portion
+                     actualValidWindows = size(x_clean, 2);
+                     windowsToKeep = min(actualValidWindows, effectiveMmax); % Limit by original effectiveMmax
+
+                     if windowsToKeep > 0
+                         % Only assign the kept windows to the correctly sized preallocated array
+                         processedZanoteli(:, 1:windowsToKeep, chan) = x_clean(:, 1:windowsToKeep);
+                         minWindowsAcrossChannels = min(minWindowsAcrossChannels, windowsToKeep);
+                     else
+                         warning('  Zanoteli: No windows below threshold for channel %d after removing first 2.', chan);
+                         minWindowsAcrossChannels = 0; % No valid windows found for this channel AT ALL
+                         % Break inner loop? If one channel has 0 valid, maybe whole dataset invalid? Depends on requirement.
+                         % Assuming we continue and trim later.
+                     end
+                 end % End channel loop
+
+                 % Trim all channels to the minimum common length
+                  if minWindowsAcrossChannels > 0
+                     % Trim the NaN preallocated array to the actual min common length
+                     currentSignal = processedZanoteli(:, 1:minWindowsAcrossChannels, :);
+                      % Check if trimming resulted in empty signal (should only happen if minWindows=0)
+                      if isempty(currentSignal) || size(currentSignal,2)==0
+                          warning('  Zanoteli: Trimming resulted in 0 common valid windows. Returning empty.');
+                          processedSignal = []; return;
+                      end
+                     fprintf('  Zanoteli complete. Resulting windows: %d.\n', minWindowsAcrossChannels);
+                 else
+                     warning('  Zanoteli: Preprocessing resulted in 0 common valid windows across channels. Returning empty.');
+                     processedSignal = []; return;
+                 end
+
+             else % Zanoteli disabled - apply Mmax_limit if it's finite
+                 if ~isinf(Mmax_limit)
+                     nWindowsCurrent = size(currentSignal, 2);
+                     windowsToKeep = min(nWindowsCurrent, Mmax_limit);
+                     if windowsToKeep < nWindowsCurrent
+                         currentSignal = currentSignal(:, 1:windowsToKeep, :);
+                         fprintf('  Preprocessing: Signal trimmed to Mmax limit %d.\n', windowsToKeep);
+                     end
+                 end
+             end % End ZanoteliEnable check
+
+             % --- Signal Empty Check ---
+             if isempty(currentSignal) || size(currentSignal,2) == 0
+                  processedSignal = [];
+                  fprintf('applyPreprocessing: Signal is empty after initial processing/trimming steps.\n');
+                  return;
+             end
+
+             % --- 2. Filtering ---
+             if obj.FilterEnable
+                 [nSamplesFilt, nWindowsFilt, nChanFilt] = size(currentSignal);
+                 fprintf('  Applying Butterworth filter (Order=%d, Fc=[%.1f, %.1f] Hz)...\n', obj.FilterOrder, obj.FilterFcLower, obj.FilterFcUpper);
+
+                 filtfiltMinLength = obj.FilterOrder * 3 + 1; % filtfilt needs length > 3*order
+                 if nSamplesFilt < filtfiltMinLength
+                     warning('  Filtering: Signal length per window (%d samples) is too short for stable filtfilt (Order %d requires >=%d). Skipping filter.', nSamplesFilt, obj.FilterOrder, filtfiltMinLength);
+                     processedSignal = currentSignal; return;
+                 end
+
+                 try
+                    [b, a] = butter(obj.FilterOrder, [obj.FilterFcLower, obj.FilterFcUpper] / (obj.Fs / 2), 'bandpass');
+                 catch ME_butter
+                      warning('Filtering: Could not design Butterworth filter. Error: %s. Skipping filter.', ME_butter.message);
+                      processedSignal = currentSignal; return;
+                 end
+
+                 filteredSignal = zeros(size(currentSignal)); % Preallocate
+                 for chan = 1:nChanFilt
+                     signal_chan_win = squeeze(currentSignal(:, :, chan));
+                     try
+                         filtered_chan_win = filtfilt(b, a, signal_chan_win); % Apply column-wise
+                         filteredSignal(:, :, chan) = filtered_chan_win;
+                     catch ME_filt
+                          warning('Filtering: Error during filtfilt on channel %d: %s. Keeping original signal for this channel.', chan, ME_filt.message);
+                          filteredSignal(:, :, chan) = signal_chan_win; % Keep original
+                     end
+                 end
+                 currentSignal = filteredSignal;
+                 fprintf('  Filtering complete.\n');
+             end % End FilterEnable check
+
+             processedSignal = currentSignal;
+             fprintf('applyPreprocessing: Finished. Output size: %d x %d x %d\n', size(processedSignal));
+        end % applyPreprocessing
+
+
+         % --- applyFFT Method ---
+         function fftSignal = applyFFT(obj, processedSignal)
+            % Applies FFT to preprocessed time-domain data (samples x windows x channels).
+            % Returns FFT data (bins x windows x channels).
+
+            fftSignal = []; % Initialize output
+            if isempty(processedSignal)
+                 fprintf('applyFFT: Input processedSignal is empty.\n');
+                return;
+            end
+
+            [nSamples, nWindows, nChan] = size(processedSignal);
+            if nChan == 0 || nWindows == 0 || nSamples == 0
+                fprintf('applyFFT: Input processedSignal has zero dimension (%d x %d x %d).\n', nSamples, nWindows, nChan);
+                return;
+            end
+
+             numChanToProcess = nChan;
+             if nChan ~= obj.NumChannels
+                warning('applyFFT: Channel count in data (%d) differs from processor config (%d). Processing %d channels.', nChan, obj.NumChannels, nChan);
+             end
+
+            fftSignal = zeros(obj.NumBins, nWindows, numChanToProcess); % Preallocate
+
+            fprintf('  Applying FFT (NFFT=%d, NumBins=%d)...\n', obj.NFFT, obj.NumBins);
+            for chan = 1:numChanToProcess
+                for epoch = 1:nWindows
+                    epochData = squeeze(processedSignal(:, epoch, chan));
+                    if any(isnan(epochData))
+                        warning('  FFT: NaNs found in data for epoch %d, channel %d. FFT result will be NaN.', epoch, chan);
+                        temp = nan(obj.NFFT, 1);
+                    else
+                         try
+                            temp = fft(epochData, obj.NFFT);
+                         catch ME_fft
+                             warning('  FFT: Error during fft for epoch %d, channel %d: %s. Result set to NaN.', epoch, chan, ME_fft.message);
+                             temp = nan(obj.NFFT, 1);
+                         end
+                    end
+                    % Check if temp is correct size before indexing
+                    if numel(temp) >= obj.NumBins
+                        fftSignal(:, epoch, chan) = temp(1:obj.NumBins);
+                    else
+                         warning('  FFT: Result size (%d) smaller than NumBins (%d) for epoch %d, channel %d. Padding with NaN.', numel(temp), obj.NumBins, epoch, chan);
+                         fftSignal(:, epoch, chan) = NaN; % Mark as invalid
+                    end
+                end
+            end
+             fprintf('  FFT complete.\n');
+         end % applyFFT
+
+         % --- processBulkData Method ---
+         function obj = processBulkData(obj, dataManager)
+            % Processes bulk data stored in DataManager through preprocessing and FFT.
+            % Stores results in obj.processedTimeSeries and obj.frequencyDomainData.
+            arguments
+                 obj SignalProcessor
+                 dataManager DataManager
+            end
+
+            if ~dataManager.isBulkLoaded
+                error('SignalProcessor: Bulk data not loaded in DataManager. Load data first.');
+            end
+
+            bulkRawData = dataManager.getBulkTimeSeries();
+            if isempty(bulkRawData)
+                error('SignalProcessor: Bulk data retrieved from DataManager is empty.');
+            end
+
+            [nDim1, nDim2] = size(bulkRawData);
+            obj.processedTimeSeries = cell(nDim1, nDim2);
+            obj.frequencyDomainData = cell(nDim1, nDim2);
+
+            fprintf('SignalProcessor: Starting bulk processing (%d x %d exams)...\n', nDim1, nDim2);
+            totalExams = numel(bulkRawData);
+            processedCount = 0;
+
+            for idx1 = 1:nDim1 % Iterate stimulus/mean index
+                 % Determine Mmax limit for this primary index (Stimulus or Mean Group)
+                 suggestedMmax = Inf; % Default
+                 max_len_found = 0; % Track max windows found for this index1 group
+                 needs_mmax_calc = false;
+
+                 if strcmp(dataManager.Mode,'exp')
+                    mmax_val = dataManager.getSuggestedMMax(idx1);
+                    if ~isempty(mmax_val)
+                        suggestedMmax = mmax_val;
+                    else
+                        needs_mmax_calc = true; % Need to find max length across subjects
+                        warning('SignalProcessor:processBulkData', 'No ExpSuggestedMMax for Stimulus Index %d.', idx1);
+                    end
+                 else % Simulation mode
+                      needs_mmax_calc = true; % Always find max length for sims unless duration was strictly enforced previously
+                 end
+
+                 % If needed, find the maximum number of windows across the secondary index for this primary index
+                 if needs_mmax_calc
+                      max_windows_group = 0;
+                      for idx2_inner = 1:nDim2
+                          if idx1 <= size(bulkRawData,1) && idx2_inner <= size(bulkRawData,2) && ~isempty(bulkRawData{idx1, idx2_inner})
+                              max_windows_group = max(max_windows_group, size(bulkRawData{idx1, idx2_inner}, 2));
+                          end
+                      end
+                      if max_windows_group > 0
+                           suggestedMmax = max_windows_group;
+                           fprintf('  Setting Mmax limit based on observed data for Index1=%d: %d windows.\n', idx1, suggestedMmax);
+                      else
+                           warning('SignalProcessor:processBulkData','No data found to determine Mmax limit for Index1=%d. Using Inf.', idx1);
+                           suggestedMmax = Inf; % Fallback
+                      end
+                 end
+                 % End Mmax determination for this group
+
+                for idx2 = 1:nDim2 % Iterate subject/std index
+                    processedCount = processedCount + 1;
+                    fprintf('Processing Exam %d/%d (Index1: %d, Index2: %d)...\n', processedCount, totalExams, idx1, idx2);
+                    rawData = []; % Ensure rawData is reset or defined
+                    if idx1 <= size(bulkRawData,1) && idx2 <= size(bulkRawData,2)
+                        rawData = bulkRawData{idx1, idx2};
+                    end
+
+                    if isempty(rawData)
+                        fprintf('  Skipping: No raw data available for Index1=%d, Index2=%d.\n', idx1, idx2);
+                         obj.processedTimeSeries{idx1, idx2} = [];
+                         obj.frequencyDomainData{idx1, idx2} = [];
+                        continue;
+                    end
+
+                    % --- 1. Preprocess ---
+                    processedData = obj.applyPreprocessing(rawData, suggestedMmax);
+                    obj.processedTimeSeries{idx1, idx2} = processedData;
+
+                    % --- 2. FFT ---
+                    fftData = obj.applyFFT(processedData); % Handles empty processedData
+                    obj.frequencyDomainData{idx1, idx2} = fftData;
+
+                     fprintf('  Finished Exam %d/%d.\n', processedCount, totalExams);
+
+                end % End inner loop (idx2)
+            end % End outer loop (idx1)
+            fprintf('SignalProcessor: Bulk processing complete.\n');
+         end % processBulkData
+
+         % --- Access Processed Data ---
+         function data = getProcessedTimeSeries(obj, idx1, idx2)
+            % Access preprocessed time series for a specific exam.
+             if idx1 >= 1 && idx1 <= size(obj.processedTimeSeries, 1) && idx2 >= 1 && idx2 <= size(obj.processedTimeSeries, 2)
+                 data = obj.processedTimeSeries{idx1, idx2};
+             else
+                 warning('SignalProcessor:getProcessedTimeSeries', 'Indices (%d, %d) out of bounds for processed time series data [%d x %d].', idx1, idx2, size(obj.processedTimeSeries,1), size(obj.processedTimeSeries,2));
+                 data = [];
+             end
+         end
+
+         function data = getFrequencyDomainData(obj, idx1, idx2)
+            % Access frequency domain (FFT) data for a specific exam.
+             if idx1 >= 1 && idx1 <= size(obj.frequencyDomainData, 1) && idx2 >= 1 && idx2 <= size(obj.frequencyDomainData, 2)
+                 data = obj.frequencyDomainData{idx1, idx2};
+             else
+                  warning('SignalProcessor:getFrequencyDomainData', 'Indices (%d, %d) out of bounds for frequency domain data [%d x %d].', idx1, idx2, size(obj.frequencyDomainData,1), size(obj.frequencyDomainData,2));
+                 data = [];
+             end
+         end
+
+         function bulkData = getBulkFrequencyDomainData(obj)
+            % Returns the entire cell array of frequency domain data.
+             bulkData = obj.frequencyDomainData;
+         end
+
+         function bulkData = getBulkProcessedTimeSeries(obj)
+             % Returns the entire cell array of processed time series data.
+             bulkData = obj.processedTimeSeries;
+         end
+
+    end % methods
+end % classdef
+
+
+============================================================
+=== FILE START: TestStrategy.m
+============================================================
+
+% --- FILE START: TestStrategy.m (Interface) ---
+classdef (Abstract) TestStrategy < handle % Use handle class for potential state caching
+    % Abstract interface defining the contract for sequential test strategies.
+    % Classes implementing this interface can calculate thresholds and
+    % determine test outcomes based on a sequence of test statistics (e.g., MSC).
+
+    properties (Abstract)
+        % Boolean indicating if this strategy inherently calculates/requires
+        % a futility threshold in addition to an efficacy/detection threshold.
+        RequiresFutilityThreshold logical
+
+        % Strategy name (e.g., 'CGST_Beta', 'ETS_NDC') used for identification.
+        Name char
+    end
+
+    methods (Abstract)
+        % Calculate or retrieve necessary thresholds for the test.
+        % Args:
+        %   obj: The strategy object itself.
+        %   strategyParams: Struct containing parameters specific to this strategy
+        %                   needed for threshold calculation (e.g., .alpha, .NDC, .VC_not).
+        %   analysisInfo: Struct containing information about the input data stages,
+        %                 needed for context (e.g., .K = number of stages,
+        %                 .M = windows per stage (scalar/vector), .MM = window counts per test point).
+        % Returns:
+        %   thresholds: Struct containing the calculated thresholds (e.g.,
+        %               .efficacy, .futility, .detection). Content depends on strategy.
+        thresholds = calculateThresholds(obj, strategyParams, analysisInfo);
+
+        % Run the sequential test on a sequence of test statistics (e.g., MSC).
+        % Args:
+        %   obj: The strategy object itself.
+        %   statSequence: The sequence of test statistics (e.g., MSC values) for each stage.
+        %                 Expected dimensions: (bins x stages x channels) or similar.
+        %   thresholds: The threshold structure returned by calculateThresholds.
+        % Returns:
+        %   decisionSequence: Matrix indicating the decision at each stage for each bin/channel.
+        %                     Values typically: 1 (Detect/Efficacy), -1 (Stop/Futility), 0 (Continue).
+        %                     Dimensions usually match statSequence.
+        %   stoppingStage: Matrix indicating the stage number at which a decision (1 or -1)
+        %                  was first reached for each bin/channel. Value is K if no early stop.
+        %                  Dimensions usually: (bins x channels).
+        [decisionSequence, stoppingStage] = runTest(obj, statSequence, thresholds);
+    end
+end
+
+
+============================================================
+=== FILE START: Visualizer.m
+============================================================
+
+% --- FILE START: Visualizer.m ---
+classdef Visualizer < handle
+    % Handles plotting of results from the sequential testing workflow.
+
+    properties
+        DataManager DataManager % Access to metadata (frequencies, mode, etc.)
+        MSCAnalyzer MSCAnalyzer % Access to MSC values and epoch definitions
+        SequentialTester SequentialTester % Access to test decisions, stopping stages, performance metrics
+    end
+
+    methods
+        function obj = Visualizer(dataManager, mscAnalyzer, sequentialTester)
+            % Constructor: Stores handles to the data and analysis objects.
+            arguments
+                dataManager DataManager
+                mscAnalyzer MSCAnalyzer
+                sequentialTester SequentialTester
+            end
+            obj.DataManager = dataManager;
+            obj.MSCAnalyzer = mscAnalyzer;
+            obj.SequentialTester = sequentialTester;
+            fprintf('Visualizer: Initialized.\n');
+        end
+
+        function figHandle = plotMSCandThresholds(obj, idx1, idx2, p1Idx, p2Idx, channelIdx)
+            % Plots MSC accumulation vs. thresholds for one specific exam/param set/channel.
+            % Args:
+            %   idx1: Stimulus/Mean index.
+            %   idx2: Subject/Std index.
+            %   p1Idx: Index for the first parameter varied in MSCAnalyzer.
+            %   p2Idx: Index for the second parameter varied in MSCAnalyzer.
+            %   channelIdx: Index of the channel to plot.
+            % Returns:
+            %   figHandle: Handle to the created figure. Returns empty if plotting fails.
+
+            figHandle = []; % Initialize output
+
+            % --- Input Validation and Data Retrieval ---
+            if isempty(obj.SequentialTester) || isempty(obj.SequentialTester.TestDecisions) || isempty(obj.SequentialTester.StrategyParamsArray)
+                warning('Visualizer: SequentialTester results or parameters are missing. Run the test first.'); return;
+            end
+             if isempty(obj.MSCAnalyzer) || isempty(obj.MSCAnalyzer.mscValues)
+                warning('Visualizer: MSCAnalyzer data is missing. Run MSC analysis first.'); return;
+            end
+
+
+            mscData = obj.MSCAnalyzer.getMSCData(idx1, idx2, p1Idx, p2Idx);
+            decisions = obj.SequentialTester.TestDecisions{idx1, idx2, p1Idx, p2Idx};
+            stopping = obj.SequentialTester.StoppingStages{idx1, idx2, p1Idx, p2Idx};
+            strategyParams = obj.SequentialTester.StrategyParamsArray{idx1, idx2, p1Idx, p2Idx};
+            epochs = obj.MSCAnalyzer.getEpochs(idx1, idx2, p1Idx, p2Idx);
+            M_vals = obj.MSCAnalyzer.getWindowsPerStage(idx1, idx2, p1Idx, p2Idx);
+
+            if isempty(mscData) || isempty(decisions) || isempty(stopping) || isempty(epochs) || isempty(M_vals) || isempty(strategyParams)
+                 warning('Visualizer: Data missing for the specified indices (Idx1:%d, Idx2:%d, P1:%d, P2:%d). Cannot plot.', idx1, idx2, p1Idx, p2Idx); return;
+            end
+
+            [nBins, K, nChan] = size(mscData);
+            if channelIdx < 1 || channelIdx > nChan
+                error('Visualizer: Selected channel index %d is out of bounds [1, %d].', channelIdx, nChan);
+            end
+            if K == 0; warning('Visualizer: MSC data has 0 stages. Cannot plot.'); return; end
+
+            % --- Recalculate Thresholds for this specific test ---
+            analysisInfo.K = K;
+            analysisInfo.M = M_vals;
+            analysisInfo.MM = epochs(2:end) - 1; % Required for ETS
+            try
+                thresholds = obj.SequentialTester.Strategy.calculateThresholds(strategyParams, analysisInfo);
+            catch ME
+                 warning('Visualizer: Could not recalculate thresholds for plotting. Error: %s', ME.message); return;
+            end
+
+            % --- Prepare Data for Plotting ---
+            mscSequenceChannel = squeeze(mscData(:, :, channelIdx));
+            cumulativeMSC = cumsum(mscSequenceChannel, 2); % Accumulate MSC for the selected channel
+
+            % Identify signal/noise bins (assuming simulation mode)
+            sigFreqBins = []; noiseFreqBins = [];
+            if strcmp(obj.DataManager.Mode, 'sim')
+                 fs = obj.DataManager.Fs;
+                 nfft = obj.DataManager.getNFFT();
+                 freqResolution = fs / nfft;
+                 sigFreqs_Hz = obj.DataManager.SimSignalFrequencies;
+                 noiseFreqs_Hz = obj.DataManager.SimNoiseFrequencies;
+                 sigFreqBins = round(sigFreqs_Hz / freqResolution) + 1;
+                 noiseFreqBins = round(noiseFreqs_Hz / freqResolution) + 1;
+                 maxBin = obj.DataManager.getNumBins();
+                 sigFreqBins = unique(sigFreqBins(sigFreqBins >= 1 & sigFreqBins <= maxBin));
+                 noiseFreqBins = unique(noiseFreqBins(noiseFreqBins >= 1 & noiseFreqBins <= maxBin));
+                 noiseFreqBins = setdiff(noiseFreqBins, sigFreqBins);
+            else
+                warning('Visualizer: Not in simulation mode. Cannot distinguish signal/noise frequencies for plotting colors.');
+                % Plot all bins with a default style
+                sigFreqBins = 1:nBins; % Treat all as 'signal' for plotting purposes
+            end
+
+            % --- Create Plot ---
+            figHandle = figure; hold on; grid on; box on;
+             param1Name = obj.MSCAnalyzer.analyzedParam1Name;
+             param1Val = obj.MSCAnalyzer.analyzedParam1Values(p1Idx);
+             param2Name = obj.MSCAnalyzer.analyzedParam2Name;
+             param2Val = obj.MSCAnalyzer.analyzedParam2Values(p2Idx);
+
+            plotTitle = sprintf('Cumulative MSC vs. Thresholds (%s = %.1f, %s = %.1f)\nIdx1=%d, Idx2=%d, Chan=%d, Strategy=%s', ...
+                               param1Name, param1Val, param2Name, param2Val, ...
+                               idx1, idx2, channelIdx, obj.SequentialTester.Strategy.Name);
+            title(plotTitle);
+            xlabel('Stage (k)');
+             if strcmp(obj.SequentialTester.Strategy.Name,'CGST_Beta')
+                 ylabel('Cumulative MSC'); % CGST uses cumulative
+             else
+                 ylabel('Per-Stage MSC'); % ETS uses per-stage
+                 cumulativeMSC = mscSequenceChannel; % Overwrite for plotting ETS
+             end
+
+            hPlots = []; % Handles for legend
+            legendEntries = {};
+
+            % Plot Signal Frequencies
+            if ~isempty(sigFreqBins)
+                 validSigBins = sigFreqBins(sigFreqBins <= nBins); % Ensure bins are within actual data
+                 if ~isempty(validSigBins)
+                    hPlots(end+1) = plot(1:K, cumulativeMSC(validSigBins, :)', '-b'); % Plot all signal freqs in blue
+                    legendEntries{end+1} = 'Signal Freq Bins';
+                 end
+            end
+
+            % Plot Noise Frequencies
+             if ~isempty(noiseFreqBins)
+                 validNoiseBins = noiseFreqBins(noiseFreqBins <= nBins); % Ensure bins are within actual data
+                  if ~isempty(validNoiseBins)
+                    hPlots(end+1) = plot(1:K, cumulativeMSC(validNoiseBins, :)', ':r'); % Plot all noise freqs in red dotted
+                    legendEntries{end+1} = 'Noise Freq Bins';
+                  end
+             end
+
+            % Plot Thresholds
+            if isfield(thresholds, 'efficacy') % For CGST
+                hPlots(end+1) = plot(1:K, thresholds.efficacy, '--g', 'LineWidth', 2);
+                legendEntries{end+1} = 'Efficacy Threshold';
+            end
+             if isfield(thresholds, 'detection') % For ETS
+                hPlots(end+1) = plot(1:K, thresholds.detection, '--g', 'LineWidth', 2);
+                legendEntries{end+1} = 'Detection Threshold';
+                if isfield(thresholds,'NDC') && thresholds.NDC > 1
+                    legendEntries{end} = sprintf('Detection Threshold (NDC=%d)', thresholds.NDC);
+                end
+            end
+
+            if obj.SequentialTester.Strategy.RequiresFutilityThreshold && isfield(thresholds, 'futility') && ~isempty(thresholds.futility)
+                hPlots(end+1) = plot(1:K, thresholds.futility, '--m', 'LineWidth', 2);
+                legendEntries{end+1} = 'Futility Threshold';
+            end
+
+            % Add legend (only use unique handles if lines were plotted multiple times)
+            if ~isempty(hPlots)
+                [~, uniqueIdx] = unique(hPlots); % Get indices of unique plot handles
+                 legend(hPlots(uniqueIdx), legendEntries(uniqueIdx));
+            end
+
+            % Adjust Y-axis limits
+            allDataToPlot = cumulativeMSC(:);
+             if isfield(thresholds, 'efficacy'); allDataToPlot = [allDataToPlot; thresholds.efficacy(:)]; end
+             if isfield(thresholds, 'detection'); allDataToPlot = [allDataToPlot; thresholds.detection(:)]; end
+             if isfield(thresholds, 'futility') && ~isempty(thresholds.futility); allDataToPlot = [allDataToPlot; thresholds.futility(:)]; end
+             validData = allDataToPlot(~isnan(allDataToPlot) & ~isinf(allDataToPlot));
+             if ~isempty(validData)
+                maxY = max(validData);
+                minY = min(validData);
+                ylim([min(0, minY - 0.1*abs(minY)), max(maxY + 0.1*abs(maxY), 0.1)]); % Dynamic ylim
+             else
+                 ylim([0, 1]); % Default if no valid data
+             end
+             xlim([1, K]);
+
+            hold off;
+        end
+
+        function figHandle = plotFalsePositiveRate(obj, p)
+            % Plots False Positive Rate (FPR) across the parameter sets tested.
+            % Requires performance metrics to be calculated first (simulation mode).
+            arguments
+                obj
+                p.PlotType {mustBeMember(p.PlotType, {'line', 'image'})} = 'image'
+            end
+
+            figHandle = [];
+
+             if isempty(obj.SequentialTester) || isempty(obj.SequentialTester.PerformanceMetrics) || ~isfield(obj.SequentialTester.PerformanceMetrics, 'PerParameter')
+                 warning('Visualizer: Performance metrics not calculated. Cannot plot FPR. Run calculatePerformance first.'); return;
+             end
+             paramResults = obj.SequentialTester.PerformanceMetrics.PerParameter;
+             [nParam1, nParam2] = size(paramResults);
+             if nParam1 == 0 || nParam2 == 0; warning('Visualizer: No parameter results found.'); return; end
+
+             fpr_matrix = zeros(nParam1, nParam2) * NaN; % Initialize with NaN
+             for i = 1:nParam1
+                 for j = 1:nParam2
+                     % Check if TotalNoiseOpportunities is present and positive
+                     if isfield(paramResults(i,j), 'TotalNoiseOpportunities') && paramResults(i,j).TotalNoiseOpportunities > 0
+                         % Check if FP field exists
+                         if isfield(paramResults(i,j), 'FP')
+                             fpr_matrix(i,j) = 100 * paramResults(i,j).FP / paramResults(i,j).TotalNoiseOpportunities;
+                         else
+                              warning('Visualizer: FP field missing in performance results for params (%d, %d).', i, j);
+                         end
+                     else
+                          % Set to NaN if no noise tests were run for this param set
+                          fpr_matrix(i,j) = NaN;
+                          % fprintf('Visualizer: No noise opportunities for params (%d, %d), FPR set to NaN.\n', i, j);
+                     end
+                 end
+             end
+
+             figHandle = figure;
+             param1Name = obj.MSCAnalyzer.analyzedParam1Name;
+             param2Name = obj.MSCAnalyzer.analyzedParam2Name;
+             param1Vals = obj.MSCAnalyzer.analyzedParam1Values;
+             param2Vals = obj.MSCAnalyzer.analyzedParam2Values;
+
+             if (nParam1 > 1 && nParam2 == 1) || (nParam1 == 1 && nParam2 > 1) || strcmp(p.PlotType, 'line')
+                 % --- Line Plot (if one parameter varied or forced) ---
+                 if nParam1 > 1 && nParam2 == 1
+                     plotData = fpr_matrix(:, 1); % FPR values for varying param1
+                     plotParams = param1Vals;
+                     xlabelStr = sprintf('%s', param1Name);
+                     titleStr = sprintf('FPR vs %s (%s = %.1f)', param1Name, param2Name, param2Vals(1));
+                 elseif nParam1 == 1 && nParam2 > 1
+                      plotData = fpr_matrix(1, :); % FPR values for varying param2
+                      plotParams = param2Vals;
+                      xlabelStr = sprintf('%s', param2Name);
+                      titleStr = sprintf('FPR vs %s (%s = %.1f)', param2Name, param1Name, param1Vals(1));
+                 else % Both > 1, but line plot requested (plot slices)
+                     warning('Visualizer: Line plot requested for 2 varying parameters. Plotting FPR vs %s for each %s.', param1Name, param2Name);
+                     hold on;
+                     colors = lines(nParam2); % Get different colors
+                     for j=1:nParam2
+                        plot(param1Vals, fpr_matrix(:,j), '-o', 'Color', colors(j,:), 'DisplayName', sprintf('%s = %.2f', param2Name, param2Vals(j)));
+                     end
+                     hold off;
+                      xlabelStr = sprintf('%s', param1Name);
+                      titleStr = sprintf('FPR vs %s (Slices for %s)', param1Name, param2Name);
+                      legend show;
+                      plotData = []; % Skip single plot command below
+                 end
+
+                 if ~isempty(plotData)
+                     plot(plotParams, plotData, '-o');
+                     xlabel(xlabelStr);
+                 end
+                 ylabel('False Positive Rate (%)');
+                 grid on;
+                 title(titleStr);
+
+             elseif nParam1 > 1 && nParam2 > 1 && strcmp(p.PlotType, 'image')
+                 % --- Image Plot (if both parameters varied) ---
+                 imagesc(param2Vals, param1Vals, fpr_matrix); % x=param2, y=param1
+                 axis xy; % Set origin to lower-left
+                 colorbar;
+                 xlabel(sprintf('%s', param2Name));
+                 ylabel(sprintf('%s', param1Name));
+                 title(sprintf('False Positive Rate (%%) vs Parameters (%s Strategy)', obj.SequentialTester.Strategy.Name));
+                 clim([0, max(10, max(fpr_matrix(:)))]); % Set color limits, ensure at least 0-10 range
+             else
+                  warning('Visualizer: Cannot determine plot type for FPR. nParam1=%d, nParam2=%d, PlotType=%s', nParam1, nParam2, p.PlotType);
+                  close(figHandle); figHandle = []; % Close empty figure
+             end
+        end % plotFalsePositiveRate
+
+        function figHandle = plotParetoFront(obj, p)
+            % Plots a Pareto front based on calculated performance metrics.
+            % Requires AverageStoppingTime to be calculated and stored.
+            arguments
+                obj
+                p.XAxisMetric char {mustBeMember(p.XAxisMetric, {'FPR', 'FNR'})} = 'FPR'
+                p.YAxisMetric char {mustBeMember(p.YAxisMetric, {'AverageStoppingTime'})} = 'AverageStoppingTime'
+                p.YAxisUnits {mustBeMember(p.YAxisUnits, {'stages', 'seconds'})} = 'stages' % Units for stopping time
+            end
+
+            figHandle = []; % Initialize
+
+            % --- Check if required data exists ---
+             if isempty(obj.SequentialTester) || isempty(obj.SequentialTester.PerformanceMetrics) || ...
+               ~isfield(obj.SequentialTester.PerformanceMetrics, 'PerParameter')
+                 warning('Visualizer: Performance metrics per parameter set not calculated. Cannot plot Pareto front.'); return;
+             end
+             % Check for Y-axis metric (Stopping Time)
+              if strcmp(p.YAxisMetric, 'AverageStoppingTime')
+                  if ~isfield(obj.SequentialTester.PerformanceMetrics, 'AverageStoppingTime')
+                     warning('Visualizer: Average stopping time not calculated. Run tester.calculateAverageStoppingTime first.'); return;
+                  else
+                      yDataMatrix = obj.SequentialTester.PerformanceMetrics.AverageStoppingTime;
+                       yLabelStr = sprintf('Average Stopping Time (%s)', p.YAxisUnits);
+                  end
+             else
+                 error('Visualizer: Y-axis metric "%s" not currently supported for Pareto plot.', p.YAxisMetric);
+             end
+
+
+             % --- Extract X-axis Metric Data ---
+             paramResults = obj.SequentialTester.PerformanceMetrics.PerParameter;
+             [nParam1, nParam2] = size(paramResults);
+             xDataMatrix = zeros(nParam1, nParam2) * NaN; % Initialize with NaN
+
+             for i = 1:nParam1
+                 for j = 1:nParam2
+                     res = paramResults(i,j);
+                     if strcmp(p.XAxisMetric, 'FPR')
+                         if isfield(res, 'TotalNoiseOpportunities') && res.TotalNoiseOpportunities > 0 && isfield(res, 'FP')
+                             xDataMatrix(i,j) = 100 * res.FP / res.TotalNoiseOpportunities;
+                             xLabelStr = 'False Positive Rate (%)';
+                         end
+                     elseif strcmp(p.XAxisMetric, 'FNR')
+                          if isfield(res, 'TotalSignalOpportunities') && res.TotalSignalOpportunities > 0 && isfield(res, 'FN')
+                             xDataMatrix(i,j) = 100 * res.FN / res.TotalSignalOpportunities;
+                              xLabelStr = 'False Negative Rate (%)';
+                          end
+                     end % Add other X metrics if needed
+                 end
+             end
+
+            % --- Prepare data points for Pareto calculation ---
+            % Combine X and Y data into a list of points [x, y]
+            % We want to minimize both X and Y (FPR/FNR and Stopping Time)
+            validMask = ~isnan(xDataMatrix) & ~isnan(yDataMatrix);
+            points = [xDataMatrix(validMask), yDataMatrix(validMask)];
+             if isempty(points)
+                warning('Visualizer: No valid data points found for Pareto analysis.'); return;
+             end
+
+            % Get corresponding parameter indices for labeling
+             [rowIdx, colIdx] = find(validMask);
+             paramIndices = [rowIdx, colIdx]; % Store indices of valid points
+
+            % --- Find Pareto Front ---
+            % Pareto front seeks to minimize objectives. Lower FPR/FNR and lower StopTime are better.
+             [paretoPoints, paretoIdx] = obj.findParetoFront(points);
+             if isempty(paretoPoints)
+                 warning('Visualizer: No Pareto optimal points found.'); return;
+             end
+
+             % --- Plot ---
+             figHandle = figure; hold on; grid on; box on;
+             title(sprintf('Pareto Front: %s vs. %s (%s Strategy)', yLabelStr, xLabelStr, obj.SequentialTester.Strategy.Name));
+             xlabel(xLabelStr);
+             ylabel(yLabelStr);
+
+             % Plot all valid points
+             plot(points(:,1), points(:,2), '.k', 'MarkerSize', 8, 'DisplayName', 'All Parameter Sets');
+
+             % Plot Pareto optimal points
+             plot(paretoPoints(:,1), paretoPoints(:,2), 'o-r', 'MarkerSize', 8, 'LineWidth', 1.5, 'MarkerFaceColor', 'r', 'DisplayName', 'Pareto Front');
+
+              % Add labels for Pareto points using parameter values
+             param1Name = obj.MSCAnalyzer.analyzedParam1Name;
+             param1Vals = obj.MSCAnalyzer.analyzedParam1Values;
+             param2Name = obj.MSCAnalyzer.analyzedParam2Name;
+             param2Vals = obj.MSCAnalyzer.analyzedParam2Values;
+
+             for k = 1:size(paretoPoints, 1)
+                 originalIdx = paretoIdx(k); % Index within the 'points' array
+                 pIdx = paramIndices(originalIdx, :); % Get row (p1) and col (p2) index
+                 p1Val = param1Vals(pIdx(1));
+                 p2Val = param2Vals(pIdx(2));
+                 text(paretoPoints(k,1), paretoPoints(k,2) * 0.99, ... % Position label slightly below point
+                      sprintf('\\{%s=%.1f, %s=%.1f\\}', param1Name, p1Val, param2Name, p2Val), ...
+                      'HorizontalAlignment', 'center', 'VerticalAlignment', 'top', 'FontSize', 8);
+             end
+
+             legend show;
+             hold off;
+        end % plotParetoFront
+
+    end % methods
+
+    methods (Static, Access = private)
+        function [ pFront, idxs] = findParetoFront( p )
+            % Filters a set of points P according to Pareto dominance for MINIMIZATION.
+            % Points that are dominated (non-strictly) by any other point are removed.
+            % Inputs:
+            % - P    : N-by-D matrix of points (objectives to be minimized).
+            % Outputs:
+            % - pFront: Pareto-filtered points.
+            % - idxs  : Indices of the non-dominated points in the original P.
+
+            [N, D] = size(p);
+            isDominated = false(N, 1); % Track dominated points
+
+            for i = 1:N
+                if isDominated(i); continue; end % Skip if already marked as dominated
+
+                % Check if point i dominates any other point j
+                % Dominates if p(i,d) <= p(j,d) for all d, and p(i,d) < p(j,d) for at least one d
+                 dominates_any = false(N, 1);
+                 for j = (i+1):N % Only need to check points after i
+                     if isDominated(j); continue; end
+
+                     if all(p(i,:) <= p(j,:)) && any(p(i,:) < p(j,:))
+                         isDominated(j) = true; % Point j is dominated by i
+                     elseif all(p(j,:) <= p(i,:)) && any(p(j,:) < p(i,:))
+                          isDominated(i) = true; % Point i is dominated by j
+                          break; % No need to check further for point i
+                     end
+                 end
+            end
+
+            pFront = p(~isDominated, :);
+            originalIndices = (1:N)';
+            idxs = originalIndices(~isDominated);
+        end % findParetoFront (Static, Private)
+    end % Static Private methods
+
+end % classdef
+
+
+============================================================
+=== FILE START: useExample01_SimulationCompare.m
+============================================================
+
+% --- FILE START: useExample01_SimulationCompare.m ---
+% Example script demonstrating simulation, processing, and comparing
+% two sequential test strategies (CGST vs. ETS_NDC) using the OO framework.
+
+clear; clc; close all;
+
+fprintf('=== USE EXAMPLE 01: Simulation Mode Comparison ===\n');
+
+% --- Configuration ---
+simParams.duration = 120; % Simulation duration in seconds
+simParams.fs = 1000;     % Sampling rate
+simParams.numChannels = 1; % Number of channels to simulate
+% Define simulation noise parameter variations
+simNoiseMeans = [-20, -25]; % dB SNR
+simNoiseStds = [.1, .1];      % dB Std Dev
+
+% Define MSC analysis parameters to test
+mscParamSettings.Method = 'fixedK'; % Use fixed number of stages
+mscParamSettings.StartWindows = [1, 5]; % Test starting analysis from window 1 or 5
+mscParamSettings.NumStages = [3, 5];   % Test using 5 or 10 stages (K)
+
+% Define Strategy parameters
+commonStrategyParams.alpha = 0.05; % Target overall Type I error (for CGST) or per-test alpha (for ETS)
+etsStrategyParams = commonStrategyParams;
+etsStrategyParams.NDC = 3; % Number of consecutive detections for ETS_NDC
+
+% --- 1. Setup DataManager (Simulation Mode) ---
+dataMgr = DataManager('sim'); % Mode 'sim'
+dataMgr.Fs = simParams.fs;    % Set sampling rate for simulation
+dataMgr.SelectedChannels = 1:simParams.numChannels; % Define channels
+% Generate bulk simulation data varying noise mean and std
+dataMgr = dataMgr.generateBulkSimulations(simNoiseMeans, simNoiseStds, ...
+                                          'duration', simParams.duration, ...
+                                          'numChannels', simParams.numChannels);
+
+% --- 2. Setup SignalProcessor ---
+processor = SignalProcessor(dataMgr);
+processor.ZanoteliEnable = false; % Disable Zanoteli for simple simulation
+processor.FilterEnable = false;   % Disable filtering for simple simulation
+% Process the generated simulation data (primarily just FFT in this case)
+processor = processor.processBulkData(dataMgr);
+
+% --- 3. Setup MSCAnalyzer ---
+mscAnalyzer = MSCAnalyzer(mscParamSettings.Method);
+% Analyze MSC using the specified parameter ranges
+mscAnalyzer = mscAnalyzer.analyzeBulkMSC(processor, ...
+                    'StartWindows', mscParamSettings.StartWindows, ...
+                    'NumStages', mscParamSettings.NumStages); % Pass ranges
+
+% --- 4 & 5. Setup and Run Tester for CGST Strategy ---
+fprintf('\n--- Testing CGST Strategy ---\n');
+cgstStrategy = CGST_BetaStrategy();
+tester_cgst = SequentialTester(cgstStrategy, dataMgr, mscAnalyzer);
+% CGST params only need alpha (M and K come from analysisInfo)
+tester_cgst = tester_cgst.runBulkTest(commonStrategyParams); % Use scalar struct
+tester_cgst = tester_cgst.calculatePerformance();
+tester_cgst = tester_cgst.calculateAverageStoppingTime('Units','stages'); % Calculate avg stop stage
+
+% --- 4 & 5. Setup and Run Tester for ETS_NDC Strategy ---
+fprintf('\n--- Testing ETS_NDC Strategy ---\n');
+etsStrategy_ndc = ETSStrategy(false); % UseFutility = false
+tester_ets_ndc = SequentialTester(etsStrategy_ndc, dataMgr, mscAnalyzer);
+% ETS params need alpha and NDC (MM comes from analysisInfo)
+tester_ets_ndc = tester_ets_ndc.runBulkTest(etsStrategyParams); % Use scalar struct with NDC
+tester_ets_ndc = tester_ets_ndc.calculatePerformance();
+tester_ets_ndc = tester_ets_ndc.calculateAverageStoppingTime('Units','stages'); % Calculate avg stop stage
+
+% --- 6. Visualize and Compare Results ---
+visualizer_cgst = Visualizer(dataMgr, mscAnalyzer, tester_cgst);
+visualizer_ets_ndc = Visualizer(dataMgr, mscAnalyzer, tester_ets_ndc);
+
+fprintf('\n--- Comparison ---\n');
+disp('CGST Overall Performance:');
+disp(tester_cgst.PerformanceMetrics.Overall);
+disp('ETS_NDC Overall Performance:');
+disp(tester_ets_ndc.PerformanceMetrics.Overall);
+
+% Plot FPR for both strategies across parameter sets
+fig_fpr_cgst = visualizer_cgst.plotFalsePositiveRate();
+title(fig_fpr_cgst.CurrentAxes,'FPR vs Parameters (CGST Strategy)');
+
+fig_fpr_ets = visualizer_ets_ndc.plotFalsePositiveRate();
+title(fig_fpr_ets.CurrentAxes,'FPR vs Parameters (ETS NDC Strategy)');
+
+% Plot Pareto fronts (using FPR vs Avg Stop Stage)
+try
+    fig_pareto_cgst = visualizer_cgst.plotParetoFront('XAxisMetric', 'FPR', 'YAxisMetric', 'AverageStoppingTime', 'YAxisUnits', 'stages');
+    title(fig_pareto_cgst.CurrentAxes, 'Pareto Front: Avg Stop Stage vs FPR (CGST)');
+catch ME_pareto_cgst
+    warning('Could not plot CGST Pareto: %s', ME_pareto_cgst.message);
+end
+
+try
+    fig_pareto_ets = visualizer_ets_ndc.plotParetoFront('XAxisMetric', 'FPR', 'YAxisMetric', 'AverageStoppingTime', 'YAxisUnits', 'stages');
+     title(fig_pareto_ets.CurrentAxes, 'Pareto Front: Avg Stop Stage vs FPR (ETS NDC)');
+catch ME_pareto_ets
+     warning('Could not plot ETS Pareto: %s', ME_pareto_ets.message);
+end
+
+% Plot MSC accumulation for a specific case (e.g., MeanIdx 1, StdIdx 1, ParamSet 1,1, Chan 1)
+try
+    visualizer_cgst.plotMSCandThresholds(1, 1, 1, 1, 1); % Idx1, Idx2, p1Idx, p2Idx, Chan
+    title(sprintf('CGST Example Run (MeanIdx=%d, StdIdx=%d, StartWin=%d, K=%d, Chan=%d)', ...
+          1,1, mscParamSettings.StartWindows(1), mscParamSettings.NumStages(1), 1));
+catch ME_plot
+     warning('Could not plot CGST MSC example: %s', ME_plot.message);
+end
+try
+    visualizer_ets_ndc.plotMSCandThresholds(1, 1, 1, 1, 1); % Idx1, Idx2, p1Idx, p2Idx, Chan
+    title(sprintf('ETS NDC Example Run (MeanIdx=%d, StdIdx=%d, StartWin=%d, K=%d, Chan=%d)', ...
+          1,1, mscParamSettings.StartWindows(1), mscParamSettings.NumStages(1), 1));
+catch ME_plot
+     warning('Could not plot ETS NDC MSC example: %s', ME_plot.message);
+end
+
+fprintf('\n=== USE EXAMPLE 01 COMPLETE ===\n');
+
+
+============================================================
+=== FILE START: useExample02_ExperimentalETS.m
+============================================================
+
+% --- FILE START: useExample02_ExperimentalETS.m ---
+% Example script demonstrating loading experimental data, processing,
+% and applying two ETS strategies (NDC-only vs Pnv) using the OO framework.
+% Assumes necessary calibration files (VC_not, parameters) are available.
+
+clear; clc; close all;
+
+fprintf('=== USE EXAMPLE 02: Experimental Data ETS Comparison ===\n');
+
+% --- Configuration ---
+expDataSourcePath = 'C:\Users\alexa\experimental_data\outros\Sinais_EEG'; % <<< SET THIS PATH
+resultsSavePath = fullfile(expDataSourcePath, 'OO_Results'); % Subfolder for results
+
+% Select subset of subjects and stimuli for demonstration
+subjectsToLoad = [1, 2, 3]; % e.g., 'Ab', 'An', 'Bb'
+stimuliToLoad = [3];       % e.g., '50dB' (index 3)
+
+% MSC Analysis Parameters (Match parameters used in original calibration if possible)
+% Example: Use parameters derived for Mmax=240 as in sinal_eeg_M*.m scripts
+% We need to select ONE parameter set for MSC calculation here, or loop through them.
+% Let's choose parameters approximating one set from the original pareto plots.
+% Example: From a Pareto point {Mmin=20, Mstep=16} for Mmax=240
+mscParamSettings.Method = 'fixedSize';
+mscParamSettings.StartWindow = 20; % Mmin equivalent
+mscParamSettings.WindowStepSize = 16;% Mstep equivalent
+
+% Strategy Parameters (MUST correspond to the MSC params chosen)
+% These would typically be loaded from files generated by calibration scripts
+% like funcao_NDC_alfaCorrigido_Mmax.m or Teste_PD_Pnv.m
+
+% --- Placeholder Loading - Replace with actual loading ---
+% These are EXAMPLE values - they NEED to be the calibrated ones for meaningful results
+% matching the chosen MSC parameters (Mmin=20, Mstep=16, Mmax=240).
+alpha_per_test = 0.05; % Example, might need calibrated value
+etsParamsNDC.alpha = alpha_per_test;
+etsParamsNDC.NDC = 3; % Example NDC value
+
+etsParamsPnv = etsParamsNDC; % Start with same alpha/NDC
+% Load VC_not corresponding to Mmax = 240 and the alpha used for its generation
+vc_not_filename = 'VC_not_Unitario_Mmax_240_alfa_0.05.mat'; % <<< CHECK FILENAME AND PATH
+try
+    vc_data = load(fullfile(expDataSourcePath, vc_not_filename), 'VC_not');
+    etsParamsPnv.VC_not = vc_data.VC_not;
+    fprintf('Loaded VC_not from %s\n', vc_not_filename);
+catch ME_vcnot
+     warning('Could not load VC_not file "%s". ETS_Pnv strategy will likely fail or use dummy thresholds. Error: %s', vc_not_filename, ME_vcnot.message);
+     % Provide dummy VC_not to allow script structure to run, but results invalid
+      etsParamsPnv.VC_not = zeros(1, 240) - Inf; % Dummy: never triggers futility
+end
+% -----------------------------------------------------
+
+if ~exist(resultsSavePath, 'dir'); mkdir(resultsSavePath); end
+if ~exist(expDataSourcePath, 'dir'); error('Experimental data source path does not exist: %s', expDataSourcePath); end
+
+% --- 1. Setup DataManager (Experimental Mode) ---
+dataMgr = DataManager('exp', expDataSourcePath, resultsSavePath);
+% Load the selected experimental data
+dataMgr = dataMgr.loadBulkExperiments(subjectsToLoad, stimuliToLoad);
+
+% --- 2. Setup SignalProcessor ---
+processor = SignalProcessor(dataMgr);
+processor.ZanoteliEnable = true; % Use Zanoteli preprocessing as in original scripts
+processor.FilterEnable = false;  % Disable filtering (Antunes) if not used in original ETS comparison
+% Process the loaded experimental data
+processor = processor.processBulkData(dataMgr);
+
+% --- 3. Setup MSCAnalyzer ---
+% We are testing ONE specific parameter set (Mmin=20, Mstep=16)
+mscAnalyzer = MSCAnalyzer(mscParamSettings.Method, ...
+                          'StartWindow', mscParamSettings.StartWindow, ...
+                          'WindowStepSize', mscParamSettings.WindowStepSize);
+% Analyze MSC just for this single parameter set
+% Pass the parameter values directly for single analysis run
+mscAnalyzer = mscAnalyzer.analyzeBulkMSC(processor, ...
+                    'StartWindows', mscParamSettings.StartWindow, ...
+                    'WindowStepSizes', mscParamSettings.WindowStepSize);
+
+% --- 4 & 5. Setup and Run Tester for ETS_NDC ---
+fprintf('\n--- Testing ETS_NDC Strategy ---\n');
+etsStrategy_ndc = ETSStrategy(false); % UseFutility = false
+tester_ets_ndc = SequentialTester(etsStrategy_ndc, dataMgr, mscAnalyzer);
+% Run the test using the loaded/defined parameters for NDC
+tester_ets_ndc = tester_ets_ndc.runBulkTest(etsParamsNDC); % scalar params for all subjects/stimuli
+% Performance calculation is not applicable in experimental mode
+
+% --- 4 & 5. Setup and Run Tester for ETS_Pnv ---
+fprintf('\n--- Testing ETS_Pnv Strategy ---\n');
+etsStrategy_pnv = ETSStrategy(true); % UseFutility = true
+tester_ets_pnv = SequentialTester(etsStrategy_pnv, dataMgr, mscAnalyzer);
+% Run the test using the loaded/defined parameters for Pnv (includes VC_not)
+tester_ets_pnv = tester_ets_pnv.runBulkTest(etsParamsPnv); % scalar params
+% Performance calculation is not applicable
+
+% --- 6. Visualize Results ---
+% Note: Can't easily calculate aggregate performance like TPR/FPR without ground truth.
+% We can visualize the test progression for specific examples.
+
+visualizer_ets_ndc = Visualizer(dataMgr, mscAnalyzer, tester_ets_ndc);
+visualizer_ets_pnv = Visualizer(dataMgr, mscAnalyzer, tester_ets_pnv);
+
+% Plot MSC vs Thresholds for Subject 1, Stimulus 3 (first loaded), ParamSet (1,1), Channel 1
+subjIdxToPlot = subjectsToLoad(1);
+stimIdxToPlot = stimuliToLoad(1);
+p1IdxToPlot = 1; % Only one parameter set was analyzed
+p2IdxToPlot = 1;
+chanToPlot = 1;
+
+try
+    fig_ndc = visualizer_ets_ndc.plotMSCandThresholds(stimIdxToPlot, subjIdxToPlot, p1IdxToPlot, p2IdxToPlot, chanToPlot);
+    title(fig_ndc.CurrentAxes, sprintf('ETS NDC Run: Subject %d, Stimulus %d, Chan %d', subjIdxToPlot, stimIdxToPlot, chanToPlot));
+catch ME_plot_ndc
+    warning('Could not plot ETS NDC example: %s', ME_plot_ndc.message);
+end
+
+try
+    fig_pnv = visualizer_ets_pnv.plotMSCandThresholds(stimIdxToPlot, subjIdxToPlot, p1IdxToPlot, p2IdxToPlot, chanToPlot);
+     title(fig_pnv.CurrentAxes, sprintf('ETS Pnv Run: Subject %d, Stimulus %d, Chan %d', subjIdxToPlot, stimIdxToPlot, chanToPlot));
+catch ME_plot_pnv
+     warning('Could not plot ETS Pnv example: %s', ME_plot_pnv.message);
+end
+
+% --- Further Analysis (Manual/Custom) ---
+% To replicate original results like TXD, FP (using noise bins), TimeM:
+% 1. Extract final decisions and stopping stages from tester_*.TestDecisions and tester_*.StoppingStages.
+% 2. Define signal bins (binsM) and noise bins (binsR) based on experimental setup (e.g., from loaded 'binsM').
+% 3. Aggregate decisions across subjects/stimuli for the chosen parameter set.
+%    - TXD: Percentage of signal bins where final decision is 1.
+%    - FP: Percentage of noise bins where final decision is 1.
+% 4. Calculate average stopping time (TimeM) based on stopping stages and epoch durations (might need epoch info from MSCAnalyzer).
+% This requires custom scripting using the results stored in the tester objects.
+
+fprintf('\n--- Experimental Analysis Notes ---\n');
+fprintf('Visualizations show example runs for Subject %d, Stimulus %d, Channel %d.\n', subjIdxToPlot, stimIdxToPlot, chanToPlot);
+fprintf('To calculate aggregate TXD, FP, TimeM as in original scripts:\n');
+fprintf('  - Manually define signal/noise frequency bins (e.g., based on loaded "binsM").\n');
+fprintf('  - Access results from tester_ets_ndc.TestDecisions{stimIdx, subjIdx, 1, 1}, etc.\n');
+fprintf('  - Aggregate decisions and stopping stages across subjects.\n');
+fprintf('  - Calculate detection rates and average stopping times.\n');
+
+fprintf('\n=== USE EXAMPLE 02 COMPLETE ===\n');
+
+
+============================================================
+=== FILE START: writes_all_matlab_into_txt.m
+============================================================
+
+% SCRIPT: combine_m_files.m
+% PURPOSE: Reads all .m files in a user-selected folder and concatenates
+%          their content into a single .txt file, separated by headers.
+
+clear; clc; close all;
+
+% --- Configuration ---
+outputFileName = 'combined_m_files.txt'; % Name of the output text file
+
+% --- 1. Select the Folder ---
+folderPath = uigetdir(pwd, 'Select the folder containing .m files');
+
+% Check if the user cancelled the dialog
+if isequal(folderPath, 0)
+    disp('Folder selection cancelled by user. Exiting script.');
+    return; % Exit the script
+end
+
+fprintf('Selected folder: %s\n', folderPath);
+
+% --- 2. Find all .m Files in the Selected Folder ---
+filePattern = fullfile(folderPath, '*.m'); % Create a pattern to search for .m files
+mFiles = dir(filePattern);                 % Get directory listing matching the pattern
+
+% Check if any .m files were found
+if isempty(mFiles)
+    fprintf('No .m files found in the selected folder: %s\n', folderPath);
+    return; % Exit if no files to process
+end
+
+fprintf('Found %d .m file(s) to process.\n', length(mFiles));
+
+% --- 3. Prepare the Output File ---
+outputFilePath = fullfile(folderPath, outputFileName); % Full path for the output file
+
+% Open the output file for writing in text mode ('wt')
+% 'wt' ensures correct line endings across different operating systems.
+outputFileID = fopen(outputFilePath, 'wt');
+
+% Check if the output file could be opened
+if outputFileID == -1
+    error('Cannot open output file "%s" for writing. Check permissions.', outputFilePath);
+    % Error will stop the script execution
+end
+
+% Use onCleanup to ensure the output file is closed even if errors occur
+cleanupOutput = onCleanup(@() fclose(outputFileID));
+
+fprintf('Writing combined content to: %s\n', outputFilePath);
+
+% --- 4. Process Each .m File ---
+totalFilesProcessed = 0;
+for i = 1:length(mFiles)
+    currentMFileName = mFiles(i).name;
+    currentMFilePath = fullfile(folderPath, currentMFileName);
+
+    fprintf('Processing: %s...\n', currentMFileName);
+
+    try
+        % --- Write Header for the Current File ---
+        fprintf(outputFileID, '============================================================\n');
+        fprintf(outputFileID, '=== FILE START: %s\n', currentMFileName);
+        fprintf(outputFileID, '============================================================\n\n');
+
+        % --- Open the current .m file for reading ('rt') ---
+        inputFileID = fopen(currentMFilePath, 'rt');
+        if inputFileID == -1
+            warning('Could not open file: %s. Skipping this file.', currentMFilePath);
+            fprintf(outputFileID, '*** ERROR: Could not read file %s ***\n\n', currentMFileName);
+            continue; % Skip to the next file in the loop
+        end
+        % Ensure the input file is closed after reading or if an error occurs within the loop
+        cleanupInput = onCleanup(@() fclose(inputFileID));
+
+        % --- Read and Write Content Line by Line ---
+        while ~feof(inputFileID)
+            line = fgetl(inputFileID); % Read one line (without newline chars)
+            if ischar(line) % fgetl returns -1 at EOF, which is not a char
+                fprintf(outputFileID, '%s\n', line); % Write the line + a newline
+            end
+        end
+
+        % --- Add Space After File Content ---
+        fprintf(outputFileID, '\n\n'); % Add two newlines for separation
+
+        % Explicitly delete the input file cleanup object for this iteration
+        % (fclose(inputFileID) will be called by it)
+        clear cleanupInput;
+        totalFilesProcessed = totalFilesProcessed + 1;
+
+    catch ME % Catch potential errors during file processing
+        warning('An error occurred while processing file %s: %s. Skipping rest of this file.', ...
+                currentMFileName, ME.message);
+        fprintf(outputFileID, '\n*** ERROR occurred during processing of file %s ***\n\n', currentMFileName);
+        % Ensure input file handle is closed if error happened after opening
+        if exist('inputFileID', 'var') && inputFileID ~= -1 && strcmp(fopen(inputFileID), currentMFilePath)
+             fclose(inputFileID);
+        end
+         clear cleanupInput; % Make sure onCleanup doesn't try to double-close
+    end
+end
+
+% --- 5. Finalization ---
+% Output file is closed automatically by the 'cleanupOutput' onCleanup object
+% when the script finishes or errors out.
+
+fprintf('------------------------------------------------------------\n');
+if totalFilesProcessed == length(mFiles)
+    fprintf('Successfully processed %d .m files.\n', totalFilesProcessed);
+else
+     fprintf('Processed %d out of %d .m files. Some files may have been skipped due to errors (see warnings).\n', ...
+             totalFilesProcessed, length(mFiles));
+end
+fprintf('Combined output written to: %s\n', outputFilePath);
+fprintf('------------------------------------------------------------\n');
+
+% Optional: Open the generated text file
+% uncomment the next line if you want the file to open automatically
+% edit(outputFilePath);
+
+

@@ -1,0 +1,310 @@
+classdef MetricsCalculator < handle
+    % Calculates and visualizes performance metrics from pre-aggregated test results.
+
+    properties (SetAccess = protected)
+        paramList % Array of structs detailing the ORD parameters for each aggregated row
+        resultsTable % Table containing ORD parameters and calculated rates/times per row
+        nSignalFreqs % Number of signal frequencies used in tests
+        nNoiseFreqs  % Number of noise frequencies used in tests
+        nChannels    % Number of channels used in tests (can be avg/typical if varies)
+
+        % Calculated overall metrics (averaged across ORD parameter sets)
+        avg_tp_rate
+        avg_fn_rate
+        avg_fp_rate
+        avg_tn_rate
+        avg_min_detect_time
+        avg_avg_detect_time
+        confmat_avg % Table summarizing average rates/times
+    end
+
+    methods
+        function obj = MetricsCalculator(paramList, aggregatedData, nSignalFreqs, nNoiseFreqs, nChannels)
+            % Constructor for MetricsCalculator
+            % paramList: Array of structs containing ORD parameters for each aggregated result set
+            % aggregatedData: Struct containing vectors of SUMMED counts/times/opportunities
+            %                 ACROSS subjects/simulations for each ORD parameter set in paramList.
+            %   - sumTP, sumFN, sumFP, sumTN (total counts per ORD param set)
+            %   - totalSignalOpps, totalNoiseOpps (total opportunities per ORD param set)
+            %   - (Optional) sumMinDetTime, nMinDetTime (sum and count for averaging min time)
+            %   - (Optional) sumAvgDetTime, nAvgDetTime (sum and count for averaging avg time)
+            % nSignalFreqs, nNoiseFreqs, nChannels: Constants used during testing
+
+            arguments
+                paramList struct
+                aggregatedData struct
+                nSignalFreqs (1,1) {mustBeInteger, mustBeNonnegative}
+                nNoiseFreqs (1,1) {mustBeInteger, mustBeNonnegative}
+                nChannels (1,1) {mustBeInteger, mustBePositive} % Typical number of channels
+            end
+
+            obj.nSignalFreqs = nSignalFreqs;
+            obj.nNoiseFreqs = nNoiseFreqs;
+            obj.nChannels = nChannels; % Store typical value
+
+            if isempty(paramList) || ~isstruct(aggregatedData)
+                error('MetricsCalculator:InvalidInput', 'Input paramList or aggregatedData is empty or invalid.');
+            end
+
+            obj.calculateRatesAndTimes(paramList, aggregatedData);
+            obj.calculateAverageMetrics(); % Calculate overall averages
+        end
+
+        function calculateRatesAndTimes(obj, paramList, aggregatedData)
+            % Calculates rates and average times per ORD parameter set.
+            fprintf('[%s] Calculating final rates and average times...\n', datetime);
+
+            nParamSets = numel(paramList);
+            requiredFields = {'sumTP', 'sumFN', 'sumFP', 'sumTN', 'totalSignalOpps', 'totalNoiseOpps'};
+            if ~all(isfield(aggregatedData, requiredFields))
+                 error('MetricsCalculator:InvalidInput', 'aggregatedData missing required fields.');
+            end
+            if numel(aggregatedData.sumTP) ~= nParamSets % Check size consistency
+                 error('MetricsCalculator:InvalidInput', 'Size mismatch between paramList and aggregatedData.');
+            end
+
+            % --- Calculate Rates per ORD Param Set ---
+            tp_rate = aggregatedData.sumTP ./ aggregatedData.totalSignalOpps;
+            fn_rate = aggregatedData.sumFN ./ aggregatedData.totalSignalOpps;
+            fp_rate = aggregatedData.sumFP ./ aggregatedData.totalNoiseOpps;
+            tn_rate = aggregatedData.sumTN ./ aggregatedData.totalNoiseOpps;
+
+            % Handle division by zero
+            tp_rate(aggregatedData.totalSignalOpps == 0) = NaN;
+            fn_rate(aggregatedData.totalSignalOpps == 0) = NaN;
+            fp_rate(aggregatedData.totalNoiseOpps == 0) = NaN;
+            tn_rate(aggregatedData.totalNoiseOpps == 0) = NaN;
+
+            % --- Create Base Table ---
+            obj.resultsTable = struct2table(paramList);
+            obj.resultsTable.TP_Rate = tp_rate * 100; % In percent
+            obj.resultsTable.FN_Rate = fn_rate * 100;
+            obj.resultsTable.FP_Rate = fp_rate * 100;
+            obj.resultsTable.TN_Rate = tn_rate * 100;
+
+            % --- Calculate and Add Average Times per ORD Param Set (if available) ---
+            if isfield(aggregatedData, 'sumMinDetTime') && isfield(aggregatedData, 'nMinDetTime')
+                 avgMinTime = aggregatedData.sumMinDetTime ./ aggregatedData.nMinDetTime;
+                 avgMinTime(aggregatedData.nMinDetTime == 0) = NaN; % Handle cases with no detections
+                 obj.resultsTable.AvgMinDetectTime_s = avgMinTime;
+            end
+             if isfield(aggregatedData, 'sumAvgDetTime') && isfield(aggregatedData, 'nAvgDetTime')
+                 avgAvgTime = aggregatedData.sumAvgDetTime ./ aggregatedData.nAvgDetTime;
+                 avgAvgTime(aggregatedData.nAvgDetTime == 0) = NaN;
+                 obj.resultsTable.AvgDetectTime_s = avgAvgTime; % This is the "Mean Exam Time" when TP occurs
+            end
+
+            fprintf('[%s] Rates and average times calculation complete.\n', datetime);
+        end
+
+        function calculateAverageMetrics(obj)
+            % Calculates average metrics across all ORD parameter sets in resultsTable.
+            if isempty(obj.resultsTable)
+                warning('Results table is empty. Cannot calculate average metrics.');
+                return;
+            end
+
+            obj.avg_tp_rate = mean(obj.resultsTable.TP_Rate, 'omitnan');
+            obj.avg_fn_rate = mean(obj.resultsTable.FN_Rate, 'omitnan');
+            obj.avg_fp_rate = mean(obj.resultsTable.FP_Rate, 'omitnan');
+            obj.avg_tn_rate = mean(obj.resultsTable.TN_Rate, 'omitnan');
+
+            avg_vars = {'Avg FN Rate (%)', 'Avg FP Rate (%)', 'Avg TP Rate (%)', 'Avg TN Rate (%)'};
+            avg_vals = [obj.avg_fn_rate, obj.avg_fp_rate, obj.avg_tp_rate, obj.avg_tn_rate];
+
+            if ismember('AvgMinDetectTime_s', obj.resultsTable.Properties.VariableNames)
+                obj.avg_min_detect_time = mean(obj.resultsTable.AvgMinDetectTime_s, 'omitnan');
+                avg_vars = [avg_vars, 'Overall Avg Min Detect Time (s)'];
+                avg_vals = [avg_vals, obj.avg_min_detect_time];
+            else
+                 obj.avg_min_detect_time = NaN;
+            end
+
+             if ismember('AvgDetectTime_s', obj.resultsTable.Properties.VariableNames)
+                obj.avg_avg_detect_time = mean(obj.resultsTable.AvgDetectTime_s, 'omitnan');
+                avg_vars = [avg_vars, 'Overall Avg Exam Time (TP only, s)'];
+                avg_vals = [avg_vals, obj.avg_avg_detect_time];
+             else
+                 obj.avg_avg_detect_time = NaN;
+             end
+
+            obj.confmat_avg = array2table(avg_vals, 'VariableNames', avg_vars);
+        end
+
+        function displaySummary(obj, desiredAlpha)
+            % Displays the summary results table and average confusion matrix.
+            arguments
+                obj
+                desiredAlpha = [] % Optional: To compare with FP rate
+            end
+             if isempty(obj.resultsTable)
+                warning('No results to display.');
+                return;
+            end
+            disp('--- Results Summary (First 10 Rows) ---');
+            disp(head(obj.resultsTable, 10));
+
+            disp('--- Overall Average Metrics Across Parameter Sets ---');
+            disp(obj.confmat_avg);
+
+            % Validate FP Rate against desiredAlpha if provided
+            if ~isempty(desiredAlpha) && ~isnan(obj.avg_fp_rate)
+                fprintf('Validation: Desired Alpha = %.4f, Calculated Avg FP Rate = %.4f (%.2f%%)\n', ...
+                        desiredAlpha, obj.avg_fp_rate / 100, obj.avg_fp_rate);
+                if abs(obj.avg_fp_rate / 100 - desiredAlpha) > 0.01 % Allow some tolerance
+                    warning('Calculated average FP rate deviates significantly from desired alpha!');
+                else
+                     fprintf(' -> FP rate matches desired alpha within tolerance.\n');
+                end
+            elseif ~isempty(desiredAlpha) && isnan(obj.avg_fp_rate) && obj.nNoiseFreqs > 0
+                 warning('FP Rate is NaN, cannot validate against desired alpha (%.4f). Check noise frequency processing.', desiredAlpha);
+            end
+            fprintf('-------------------------------------------\n');
+        end
+
+        % --- Plotting Methods (remain largely the same, use data from resultsTable) ---
+        function plotRateDistributions(obj, figHandle)
+             if isempty(obj.resultsTable), warning('No results to plot.'); return; end
+             if nargin < 2 || isempty(figHandle), figHandle = figure; else, figure(figHandle); end; clf(figHandle);
+             subplot(2, 2, 1); boxchart(obj.resultsTable.TP_Rate); title('TP Rate (%)'); grid on; ylim([0 100]); xlabel('Parameter Sets');
+             subplot(2, 2, 2); boxchart(obj.resultsTable.FP_Rate); title('FP Rate (%)'); grid on; ylim([0 100]); xlabel('Parameter Sets');
+             subplot(2, 2, 3); boxchart(obj.resultsTable.FN_Rate); title('FN Rate (%)'); grid on; ylim([0 100]); xlabel('Parameter Sets');
+             subplot(2, 2, 4); boxchart(obj.resultsTable.TN_Rate); title('TN Rate (%)'); grid on; ylim([0 100]); xlabel('Parameter Sets');
+             sgtitle('Distribution of Rates Across All ORD Parameter Sets');
+        end
+
+        function plotTimeDistributions(obj, figHandle)
+             if isempty(obj.resultsTable) || ~ismember('AvgMinDetectTime_s', obj.resultsTable.Properties.VariableNames), warning('No detection time results to plot.'); return; end
+             if nargin < 2 || isempty(figHandle), figHandle = figure; else, figure(figHandle); end; clf(figHandle);
+             hasMin = ismember('AvgMinDetectTime_s', obj.resultsTable.Properties.VariableNames);
+             hasAvg = ismember('AvgDetectTime_s', obj.resultsTable.Properties.VariableNames);
+             if hasMin && hasAvg
+                 subplot(1, 2, 1); boxchart(obj.resultsTable.AvgMinDetectTime_s); title('Avg Min Detection Time (s)'); grid on; xlabel('Parameter Sets');
+                 subplot(1, 2, 2); boxchart(obj.resultsTable.AvgDetectTime_s); title('Avg Exam Time (TP only, s)'); grid on; xlabel('Parameter Sets');
+             elseif hasMin, boxchart(obj.resultsTable.AvgMinDetectTime_s); title('Avg Min Detection Time (s)'); grid on; xlabel('Parameter Sets');
+             elseif hasAvg, boxchart(obj.resultsTable.AvgDetectTime_s); title('Avg Exam Time (TP only, s)'); grid on; xlabel('Parameter Sets');
+             end
+             sgtitle('Distribution of Average Detection Times Across ORD Parameter Sets');
+        end
+
+        function plotParetoFront(obj, xMetric, yMetric, figHandle)
+            % Plots a Pareto front for two specified metrics from the results table.
+            % Example: plotParetoFront('MinDetectTime_s', 'TP_Rate', figure)
+             arguments
+                 obj
+                 xMetric char % Variable name in resultsTable for X-axis (e.g., 'MinDetectTime_s', 'FP_Rate')
+                 yMetric char % Variable name in resultsTable for Y-axis (e.g., 'TP_Rate')
+                 figHandle = figure % Optional figure handle
+             end
+
+             % --- Input Validation ---
+             if isempty(obj.resultsTable)
+                 warning('MetricsCalculator:PlotWarning', 'Cannot plot Pareto front. Results table is empty.');
+                 return;
+             end
+             if ~ismember(xMetric, obj.resultsTable.Properties.VariableNames)
+                  warning('MetricsCalculator:PlotWarning', 'Cannot plot Pareto front. X-Metric "%s" not found in results table.', xMetric);
+                 return;
+             end
+              if ~ismember(yMetric, obj.resultsTable.Properties.VariableNames)
+                  warning('MetricsCalculator:PlotWarning', 'Cannot plot Pareto front. Y-Metric "%s" not found in results table.', yMetric);
+                 return;
+             end
+
+             % --- Figure Handling ---
+             if nargin < 4 || isempty(figHandle)
+                figHandle = figure; % Create new figure if none provided
+             else
+                try % Attempt to use provided handle
+                    figure(figHandle);
+                catch % If handle is invalid, create a new figure
+                    warning('MetricsCalculator:PlotWarning', 'Provided figure handle is invalid. Creating new figure.');
+                    figHandle = figure;
+                end
+             end
+             clf(figHandle); % Clear the figure
+
+             % --- Data Preparation ---
+             % Determine optimization direction (default: minimize X, maximize Y)
+             % Adjust logic based on metric names if needed
+             minimizeX = true; if contains(xMetric,'TP_Rate','IgnoreCase',true), minimizeX=false; end % Maximize TP Rate if on X
+             maximizeY = true; if contains(yMetric,'FP_Rate','IgnoreCase',true) || contains(yMetric,'FN_Rate','IgnoreCase',true) || contains(yMetric,'Time','IgnoreCase',true), maximizeY=false; end % Minimize FP/FN/Time if on Y
+
+             xVals = obj.resultsTable.(xMetric);
+             yVals = obj.resultsTable.(yMetric);
+
+             % Find indices of valid (non-NaN) data points
+             valid_idx_logical = ~isnan(xVals) & ~isnan(yVals);
+
+             if sum(valid_idx_logical) < 2 % Need at least 2 points for Pareto front
+                 warning('MetricsCalculator:PlotWarning', 'Not enough valid data points (need >= 2) to generate Pareto plot for %s vs %s.', xMetric, yMetric);
+                 % Optionally plot the single point or nothing
+                 if sum(valid_idx_logical) == 1
+                     plot(xVals(valid_idx_logical), yVals(valid_idx_logical), 'k.', 'MarkerSize', 8);
+                     xlabel(strrep(xMetric,'_',' ')); ylabel(strrep(yMetric,'_',' '));
+                     title(sprintf('Only one valid point for: %s vs. %s', strrep(yMetric,'_',' '), strrep(xMetric,'_',' ')));
+                     grid on;
+                 end
+                 return;
+             end
+
+             % Select only valid data for Pareto calculation
+             xDataValid = xVals(valid_idx_logical);
+             yDataValid = yVals(valid_idx_logical);
+
+             % Prepare objectives for minimization as required by paretoFront
+             obj1 = xDataValid; if ~minimizeX, obj1 = -obj1; end % Negate if maximizing
+             obj2 = yDataValid; if maximizeY, obj2 = -obj2; end % Negate if maximizing
+
+             % --- Calculate Pareto Front ---
+             try
+                 % Get the INDICES relative to the VALID data subset
+                 [frontIndicesRel, ~] = paretoFront([obj1, obj2]);
+
+                 if isempty(frontIndicesRel)
+                      warning('MetricsCalculator:ParetoWarning', 'paretoFront returned empty despite valid input data for %s vs %s.', xMetric, yMetric);
+                      plot(xDataValid, yDataValid, 'k.', 'MarkerSize', 8, 'DisplayName', 'All Valid Parameter Sets');
+                      xlabel(strrep(xMetric,'_',' ')); ylabel(strrep(yMetric,'_',' '));
+                      title(sprintf('Pareto Front Calculation Failed: %s vs. %s', strrep(yMetric,'_',' '), strrep(xMetric,'_',' ')));
+                      legend('Location', 'best'); grid on;
+                      return;
+                 end
+
+                 % Use relative indices to get the actual X and Y points from the valid data subset
+                 paretoX = xDataValid(frontIndicesRel);
+                 paretoY = yDataValid(frontIndicesRel);
+
+             catch ME_pareto
+                 warning('MetricsCalculator:ParetoError', 'Could not calculate Pareto front for %s vs %s: %s', xMetric, yMetric, ME_pareto.message);
+                 % Fallback: Plot only the valid points as scatter
+                 plot(xDataValid, yDataValid, 'k.');
+                 xlabel(strrep(xMetric,'_',' ')); ylabel(strrep(yMetric,'_',' '));
+                 title(sprintf('Scatter Plot (Pareto Error): %s vs. %s', strrep(yMetric,'_',' '), strrep(xMetric,'_',' ')));
+                 grid on;
+                 return;
+             end
+
+             % --- Plotting ---
+             % Sort pareto points for cleaner line plot (e.g., by X value)
+             [sortedX, sort_idx] = sort(paretoX);
+             sortedY = paretoY(sort_idx);
+
+             % Plot all VALID points and the Pareto front line
+             plot(xDataValid, yDataValid, 'k.', 'MarkerSize', 8, 'DisplayName', 'All Valid Parameter Sets');
+             hold on;
+             plot(sortedX, sortedY, '-ob', 'LineWidth', 1.5, 'MarkerSize', 6, 'DisplayName', 'Pareto Front');
+             hold off;
+             xlabel(strrep(xMetric,'_',' '));
+             ylabel(strrep(yMetric,'_',' '));
+             title(sprintf('Pareto Front: %s vs. %s', strrep(yMetric,'_',' '), strrep(xMetric,'_',' ')));
+             legend('Location', 'best', 'Interpreter', 'none'); % Prevent underscore interpretation
+             grid on;
+             % Consider adding axis limits if needed, e.g.:
+             % xlim([min(xDataValid) max(xDataValid)]);
+             % ylim([min(yDataValid) max(yDataValid)]);
+        end % End plotParetoFront
+
+        function results = getResultsTable(obj), results = obj.resultsTable; end
+        function avgResults = getAverageResults(obj), avgResults = obj.confmat_avg; end
+    end
+end

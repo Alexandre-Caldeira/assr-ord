@@ -1,0 +1,217 @@
+% --- FILE START: ETSStrategy.m ---
+classdef ETSStrategy < TestStrategy
+    % Implements the Early Termination Strategy (ETS) based on consecutive
+    % detections (NDC) and optionally a futility criterion (Pnv - Possible Non-detection Value).
+
+    % Note: The abstract 'TestStrategy' class defines 'RequiresFutilityThreshold' as abstract.
+    %       We implement it here but remove specific validation attributes like (1,1) logical
+    %       to avoid conflict with the abstract definition.
+
+    properties
+        % Implementing the abstract property from TestStrategy:
+        RequiresFutilityThreshold % Boolean. Value assigned in constructor. <<< VALIDATION REMOVED
+
+        % Properties specific to this concrete class:
+        UseFutility (1,1) logical % Flag to control Pnv logic. Validated here.
+        Name                % Strategy name set dynamically.
+    end
+
+     methods
+        function obj = ETSStrategy(useFutility)
+            % Constructor: Sets whether to use the futility criterion.
+            arguments
+                 useFutility logical = false % Default to original ETS (NDC only).
+            end
+            obj.UseFutility = useFutility;
+
+            % Assign value to the implemented abstract property:
+            obj.RequiresFutilityThreshold = useFutility; % <<< Value assignment
+
+            % Set the Name based on the flag
+            if useFutility
+                 obj.Name = 'ETS_Pnv'; % Name for ETS with Possible non-detection value
+            else
+                 obj.Name = 'ETS_NDC'; % Name for ETS with only NDC criterion
+            end
+             fprintf('%s: Initialized (UseFutility=%d).\n', obj.Name, obj.UseFutility);
+        end
+
+        function thresholds = calculateThresholds(obj, strategyParams, analysisInfo)
+             % Calculates/retrieves thresholds for the ETS strategy.
+             % Args:
+             %   strategyParams: Struct must contain .alpha (per-test significance), .NDC (consecutive detections needed).
+             %                   If obj.UseFutility=true, must also contain .VC_not (futility thresholds indexed by M).
+             %   analysisInfo: Struct must contain .MM (vector of window counts, M, for each test point/stage).
+             % Returns:
+             %   thresholds: Struct with .detection (vector), .futility (vector or []), .NDC (scalar).
+
+             % --- Input Validation ---
+             if ~isfield(strategyParams, 'alpha') || ~isscalar(strategyParams.alpha) || strategyParams.alpha <= 0 || strategyParams.alpha >= 1
+                 error('%s: strategyParams must include a scalar alpha between 0 and 1.', obj.Name);
+             end
+             if ~isfield(strategyParams, 'NDC') || ~isscalar(strategyParams.NDC) || strategyParams.NDC < 1 || floor(strategyParams.NDC) ~= strategyParams.NDC
+                 error('%s: strategyParams must include a positive integer NDC >= 1.', obj.Name);
+             end
+             if ~isfield(analysisInfo, 'MM') || ~isvector(analysisInfo.MM) || isempty(analysisInfo.MM) || any(analysisInfo.MM < 1)
+                  error('%s: analysisInfo must include a non-empty vector MM of positive window counts (M values).', obj.Name);
+             end
+              % Validate VC_not presence only if futility is enabled
+              if obj.UseFutility % Check obj property, not just input flag
+                   if ~isfield(strategyParams, 'VC_not') || ~isvector(strategyParams.VC_not) || isempty(strategyParams.VC_not)
+                       error('%s: Futility enabled (UseFutility=true), but strategyParams.VC_not vector is missing or empty.', obj.Name);
+                   end
+              end
+
+             MM = analysisInfo.MM;
+             if iscolumn(MM); MM = MM'; end % Ensure row vector for consistency
+             alpha = strategyParams.alpha;
+             K = numel(MM); % Number of stages/test points
+
+             % --- Calculate Detection Thresholds (VC_MSC logic) ---
+             VC_detection = nan(1, K); % Initialize with NaN
+             for i = 1:K
+                 m_val = MM(i);
+                 if m_val > 1
+                     VC_detection(i) = 1 - alpha^(1 / (m_val - 1));
+                      VC_detection(i) = max(0, min(1, VC_detection(i))); % Clamp to [0, 1]
+                 else
+                     VC_detection(i) = NaN; % Threshold for M=1 undefined
+                     warning('%s:calculateThresholds', 'Detection threshold undefined for M=1 at stage %d. Set to NaN.', obj.Name, i);
+                 end
+             end
+             thresholds.detection = VC_detection;
+             thresholds.NDC = strategyParams.NDC;
+
+             % --- Include Futility Thresholds (if enabled) ---
+             if obj.UseFutility % Check obj property
+                 VC_not_full = strategyParams.VC_not;
+                 max_MM = max(MM(~isnan(MM))); % Max M needed, ignore NaNs in MM if any
+                 if isempty(max_MM) % Handle case where all MM are NaN
+                     warning('%s:calculateThresholds', 'Cannot determine max M for VC_not check as all MM values are NaN.', obj.Name);
+                     thresholds.futility = nan(1, K); % Set futility thresholds to NaN
+                 elseif numel(VC_not_full) < max_MM
+                     error('%s: Provided VC_not vector length (%d) is less than the maximum valid M required (%d).', obj.Name, numel(VC_not_full), max_MM);
+                 else
+                     try
+                         % Extract futility thresholds corresponding to the M values used at each stage
+                         % Handle potential NaN M values gracefully
+                         valid_MM_indices = ~isnan(MM);
+                         thresholds.futility = nan(1, K); % Initialize with NaN
+                         valid_MM_values = MM(valid_MM_indices); % Get only the valid M values
+                         % Ensure M values are valid indices for VC_not_full
+                         if any(valid_MM_values < 1) || any(valid_MM_values > numel(VC_not_full))
+                            error('%s: MM contains values outside the valid index range [1, %d] for VC_not.', obj.Name, numel(VC_not_full));
+                         end
+                         thresholds.futility(valid_MM_indices) = VC_not_full(valid_MM_values); % Index only valid M values
+                         thresholds.futility = thresholds.futility(:)'; % Ensure row vector
+                     catch ME_index
+                          error('%s: Error indexing VC_not with MM values. Ensure MM contains valid indices for VC_not. Error: %s', obj.Name, ME_index.message);
+                     end
+                 end
+             else
+                  thresholds.futility = []; % Indicate futility is not used
+             end
+        end % calculateThresholds
+
+
+        function [decisionSequence, stoppingStage] = runTest(obj, statSequence, thresholds)
+             % Runs the ETS test (NDC or Pnv) on a sequence of test statistics.
+             % Args:
+             %   statSequence: Test statistics (e.g., MSC) (bins x stages x channels). Stages correspond to MM points.
+             %   thresholds: Struct from calculateThresholds (.detection, .futility, .NDC).
+             % Returns:
+             %   decisionSequence: Decisions (1=Detect, -1=Futility, 0=Continue) (bins x stages x channels).
+             %   stoppingStage: Stage number of decision (bins x channels).
+
+             % --- Input Validation ---
+             if ~isfield(thresholds, 'detection') || ~isfield(thresholds, 'NDC')
+                 error('%s: Threshold struct missing detection or NDC fields.', obj.Name);
+             end
+             if isempty(statSequence); decisionSequence=[]; stoppingStage=[]; return; end
+
+             [nBins, K, nChannels] = size(statSequence); % K = number of test points/stages
+             VC_det = thresholds.detection(:)'; % Ensure row
+             NDC = thresholds.NDC;
+
+             if numel(VC_det) ~= K
+                 error('%s: Detection threshold length (%d) mismatch with stages (%d).', obj.Name, numel(VC_det), K);
+             end
+
+             VC_fut = []; % Initialize futility threshold
+             if obj.UseFutility % Check obj property
+                  if ~isfield(thresholds, 'futility') % Should exist if UseFutility is true
+                       error('%s: Futility enabled but futility thresholds field missing from threshold struct.', obj.Name);
+                  end
+                  VC_fut = thresholds.futility(:)'; % Ensure row
+                   % Check length only if futility threshold is actually needed and not empty
+                   if ~isempty(VC_fut) && numel(VC_fut) ~= K
+                       error('%s: Futility threshold length (%d) mismatch with stages (%d).', obj.Name, numel(VC_fut), K);
+                   end
+             end
+
+             % --- Initialize Outputs ---
+             decisionSequence = zeros(nBins, K, nChannels); % 0 = continue
+             stoppingStage = ones(nBins, nChannels) * K;    % Default stop at end
+
+             % --- Run Test Logic ---
+             for chan = 1:nChannels
+                 for freqBin = 1:nBins
+                     consecutiveDetections = 0;
+                     alreadyStopped = false;
+
+                     for k = 1:K % Loop through each test point (stage)
+                         if alreadyStopped
+                              % Carry forward decision
+                              if k > 1; decisionSequence(freqBin, k, chan) = decisionSequence(freqBin, k-1, chan); end
+                              continue;
+                         end
+
+                         currentStat = statSequence(freqBin, k, chan);
+
+                         % Handle NaN input statistic -> NaN decision
+                         if isnan(currentStat)
+                             decisionSequence(freqBin, k:K, chan) = NaN;
+                             stoppingStage(freqBin, chan) = k;
+                             alreadyStopped = true;
+                             continue;
+                         end
+
+                         % Check Detection Threshold (only if threshold is valid, i.e., not NaN)
+                         isDetect = false; % Default
+                         if ~isnan(VC_det(k)) && (currentStat > VC_det(k))
+                             isDetect = true;
+                         end
+
+                         if isDetect
+                             consecutiveDetections = consecutiveDetections + 1;
+                         else
+                             consecutiveDetections = 0; % Reset count if no detection this stage
+                         end
+
+                         % Apply NDC Decision Rule
+                         if consecutiveDetections >= NDC
+                             decisionSequence(freqBin, k:K, chan) = 1; % Detect from this stage onwards
+                             stoppingStage(freqBin, chan) = k;
+                             alreadyStopped = true;
+                             continue; % Stop testing for this freq/chan
+                         end
+
+                         % Apply Futility Decision Rule (if enabled and threshold valid)
+                         if obj.UseFutility && ~isempty(VC_fut) && ~isnan(VC_fut(k))
+                             isFutile = (currentStat < VC_fut(k));
+                             if isFutile
+                                 decisionSequence(freqBin, k:K, chan) = -1; % Futility from this stage onwards
+                                 stoppingStage(freqBin, chan) = k;
+                                 alreadyStopped = true;
+                                 continue; % Stop testing for this freq/chan
+                             end
+                         end
+
+                         % If neither condition met, continue (decision remains 0)
+                     end % stage loop (k)
+                 end % frequency loop (freqBin)
+             end % channel loop (chan)
+        end % runTest method
+
+     end % methods
+end % classdef

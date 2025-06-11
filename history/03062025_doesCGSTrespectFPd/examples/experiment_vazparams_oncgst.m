@@ -17,9 +17,9 @@ dtl = dtl.computeBulkFFTs(); % dtl.groupSignals = ppc.groupFilteredSignals;
 dtl.age();
 
 %% import parameters from Vaz 2024SS
-caminho = 'C:\Users\alexa\Desktop\Numero_Deteccoes_consecutiva_H\';
+caminho = 'C:\PPGEE\Assessing CGST on ASSR\Numero_Deteccoes_consecutiva_H_recebidodePatricia14022025\Numero_Deteccoes_consecutiva_H\';
 vaz_data = load([caminho,'NDC_AlfaCorrigido_Mmax240_alfa_0.05_FPdesejado0.05.mat'], ...
-    'alfa_corrigido', 'NDC_minimo','P', 'nRuns');
+    'alfa_corrigido', 'NDC_minimo','P','nRuns');
 
 % vaz_startWindows = vaz_data.P(:,1)';
 % vaz_windowSizes = vaz_data.P(:,2)';
