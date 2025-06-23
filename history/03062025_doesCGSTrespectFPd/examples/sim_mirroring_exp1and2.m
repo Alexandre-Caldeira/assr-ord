@@ -8,11 +8,21 @@ clearvars; close all; clc;
 
 tester = ORDTester(ORDCalculator(DataLoader('sim')));
 
+<<<<<<< HEAD
 tester.dataloader = tester.dataloader.resetDuration(30);
+=======
+% tester.dataloader = tester.dataloader.resetDuration(55);
+% tester.dataloader = tester.dataloader.genBulkSim( ...
+%     groupNoiseMean=[-30 -20], groupNoiseStd=5*randi(5,1,11)).computeBulkFFTs(mode='sim');
+% tester.dataloader = tester.dataloader.resetDuration(90);
+% tester.dataloader = tester.dataloader.genBulkSim( ...
+%     groupNoiseMean=[-20], groupNoiseStd=randi(5,1,11)).computeBulkFFTs(mode='sim');
+% tester.age() %                                                                                      
+tester.dataloader = tester.dataloader.resetDuration(90);
+>>>>>>> 74a1661e5b3f7e23f6c08c67a8595157d1441f67
 tester.dataloader = tester.dataloader.genBulkSim( ...
-    groupNoiseMean=[-30 -20], groupNoiseStd=5*randi(5,1,11)).computeBulkFFTs(mode='sim');
-tester.age() %                                                                                      
-
+    groupNoiseMean=[-30 -28 -32], groupNoiseStd=randi(5,1,11)).computeBulkFFTs(mode='sim');
+tester.age() %   
 % ppc = PreProcessor();
 % ppc = ppc.bulkZanoteliPreprocess(tester.dataloader);
 % ppc = ppc.bulkAntunesFilter(tester.dataloader);
@@ -40,8 +50,13 @@ tester.age() %
 tester.ord_calculator = ORDCalculator(tester.dataloader).fit_epochs( ...
     stimulusIndices = tester.dataloader.groupNoiseMean,...
     subjectIndices = tester.dataloader.groupNoiseStd,...
+<<<<<<< HEAD
     startWindows = 1:20, ... % windowStepSizes = 52, ...
     K_stages = 2:5,...
+=======
+    startWindows = [1:5 20 30], ... % windowStepSizes = 52, ...
+    K_stages = 2:10,...
+>>>>>>> 74a1661e5b3f7e23f6c08c67a8595157d1441f67
     single_or_bulk = 'bulk',...
     lastWindowCalcMethod = 'exactK', ... % maxFromStart, maxFromLast, exactK, fromSizeType
     sizeType = 'fixedSize'... % minToMax, minToFix, withResampling, default = fixedSize
@@ -216,9 +231,9 @@ plot(100*tp_rate(nonemptyparams_idxs,single_channel),'.')
 
 figure(2)
 subplot(211)
-boxchart(100*fp_rate(nonemptyparams_idxs,single_channel))
+b1 = boxchart(100*fp_rate(nonemptyparams_idxs,single_channel));
 subplot(212)
-boxchart(100*tp_rate(nonemptyparams_idxs,single_channel))
+b2 = boxchart(100*tp_rate(nonemptyparams_idxs,single_channel));
 
 %%
 
